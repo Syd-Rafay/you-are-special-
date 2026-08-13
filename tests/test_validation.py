@@ -142,3 +142,26 @@ class TestStudyValidator:
         result = OctValidator.validate_study(None, None)
         assert result.is_valid is False
         assert len(result.errors) > 0
+
+
+class TestPipelineValidationFlag:
+    """Test pipeline validate parameter behavior."""
+
+    def test_validate_true_raises_on_invalid_data(self, tmp_path):
+        """Test validate=True raises ValidationError on empty study data."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"\x00" * 100)
+        from oct_converter_app.pipeline import ProcessingPipeline, ValidationError
+        pipeline = ProcessingPipeline()
+        with pytest.raises(ValidationError):
+            pipeline.process(src_file, tmp_path / "out", validate=True)
+
+    def test_validate_false_bypasses_validation_error(self, tmp_path):
+        """Test validate=False bypasses safety validation check."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"\x00" * 100)
+        from oct_converter_app.pipeline import ProcessingPipeline
+        pipeline = ProcessingPipeline()
+        study = pipeline.process(src_file, tmp_path / "out", outputs=[], validate=False)
+        assert study is not None
+

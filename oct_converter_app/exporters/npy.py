@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 from pathlib import Path
 
-from oct_converter_app.exporters.base import BaseExporter, ExportError
+from oct_converter_app.exporters.base import BaseExporter, ExportError, sanitize_path_component
 from oct_converter_app.models import OCTStudy
 
 
@@ -38,7 +38,8 @@ class NpyExporter(BaseExporter):
             study: The OCTStudy containing extracted data.
             output_dir: Directory to write .npy files.
             options: Optional configuration.
-                     Keys: 'oct_filename', 'fundus_filename' to override defaults.
+                     Keys: 'oct_filename', 'fundus_filename' to override defaults,
+                           'overwrite' (bool, default True) whether to overwrite existing files.
 
         Returns:
             List of paths to created .npy files.
@@ -48,16 +49,24 @@ class NpyExporter(BaseExporter):
         """
         output_path = self._ensure_output_dir(output_dir)
         created_files = []
+        overwrite = options.get("overwrite", True) if options else True
 
         # Export OCT volume
         if study.oct_volume is not None and study.oct_volume.volume:
             try:
                 filename = options.get("oct_filename") if options else None
-                if not filename:
-                    patient_id = study.patient_id or "unknown"
+                if filename:
+                    filename = sanitize_path_component(filename, default="oct.npy")
+                    if not filename.endswith(".npy"):
+                        filename = f"{filename}.npy"
+                else:
+                    patient_id = sanitize_path_component(study.patient_id, default="unknown")
                     filename = f"{patient_id}_oct.npy"
 
                 filepath = output_path / filename
+
+                if not overwrite and filepath.exists():
+                    raise ExportError(f"File already exists and overwrite is disabled: {filepath}")
 
                 # Stack B-scans into 3D array
                 # Shape: (num_slices, height, width)
@@ -66,6 +75,8 @@ class NpyExporter(BaseExporter):
                 np.save(filepath, volume_array)
                 created_files.append(filepath)
 
+            except ExportError:
+                raise
             except Exception as e:
                 raise ExportError(f"Failed to export OCT volume to NPY: {e}") from e
 
@@ -73,15 +84,24 @@ class NpyExporter(BaseExporter):
         if study.fundus is not None and study.fundus.image.size > 0:
             try:
                 filename = options.get("fundus_filename") if options else None
-                if not filename:
-                    patient_id = study.patient_id or "unknown"
+                if filename:
+                    filename = sanitize_path_component(filename, default="fundus.npy")
+                    if not filename.endswith(".npy"):
+                        filename = f"{filename}.npy"
+                else:
+                    patient_id = sanitize_path_component(study.patient_id, default="unknown")
                     filename = f"{patient_id}_fundus.npy"
 
                 filepath = output_path / filename
 
+                if not overwrite and filepath.exists():
+                    raise ExportError(f"File already exists and overwrite is disabled: {filepath}")
+
                 np.save(filepath, study.fundus.image)
                 created_files.append(filepath)
 
+            except ExportError:
+                raise
             except Exception as e:
                 raise ExportError(f"Failed to export fundus image to NPY: {e}") from e
 
