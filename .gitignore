@@ -23,3 +23,7 @@ venv/
 coverage/
 htmlcov/
 ```
+# Local files
+.DS_Store
+**/.DS_Store
+test_data/
