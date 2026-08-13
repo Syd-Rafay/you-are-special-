@@ -1,9 +1,29 @@
-```
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+*.pot
+.MF
+tags
+TAGS
+maint/coverage/
+.hypothesis/
+.pytest_cache/
 
 # Compiled and build artifacts
 *.o
@@ -14,19 +34,31 @@ __pycache__/
 *.exe
 *.out
 
-# Dependencies
-.venv/
-venv/
-node_modules/
-.mypy_cache/
-.pytest_cache/
-dist/
+# Distribution / packaging
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 target/
 .gradle/
 
+# Dependencies
+node_modules/
+.mypy_cache/
+
 # Logs and temp files
-*.log
 *.tmp
 *.swp
 *.swo
@@ -34,20 +66,25 @@ target/
 # Environment
 .env
 .env.local
+.env.*
 *.env.*
 
-# Editors
+# IDEs / Editors
 .vscode/
 .idea/
 
 # System
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Coverage
 coverage/
 htmlcov/
-.coverage
 
 # Compressed files
 *.zip
@@ -72,4 +109,3 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
