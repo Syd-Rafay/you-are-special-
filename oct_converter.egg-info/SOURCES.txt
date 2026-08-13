@@ -41,3 +41,17 @@ oct_converter/readers/binary_structs/boct_binary.py
 oct_converter/readers/binary_structs/e2e_binary.py
 oct_converter/readers/binary_structs/fda_binary.py
 oct_converter/readers/binary_structs/fds_binary.py
+oct_converter_app/__init__.py
+oct_converter_app/cli.py
+oct_converter_app/detector.py
+oct_converter_app/factory.py
+oct_converter_app/models.py
+oct_converter_app/pipeline.py
+oct_converter_app/registry.py
+oct_converter_app/validation.py
+oct_converter_app/exporters/__init__.py
+oct_converter_app/exporters/base.py
+oct_converter_app/exporters/dicom.py
+oct_converter_app/exporters/images.py
+oct_converter_app/exporters/metadata.py
+oct_converter_app/exporters/npy.py
