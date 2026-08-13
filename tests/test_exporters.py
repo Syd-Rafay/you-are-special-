@@ -23,8 +23,7 @@ class TestNpyExporter:
         
         oct_vol = OCTVolumeWithMetaData(
             volume=[np.zeros((100, 100), dtype=np.uint16)],
-            patient_id="TEST",
-            num_slices=1
+            patient_id="TEST"
         )
         
         study = OCTStudy(
@@ -90,8 +89,7 @@ class TestImageExporter:
         
         oct_vol = OCTVolumeWithMetaData(
             volume=[np.zeros((100, 100), dtype=np.uint16)],
-            patient_id="TEST",
-            num_slices=1
+            patient_id="TEST"
         )
         
         study = OCTStudy(
@@ -146,8 +144,7 @@ class TestMetadataExporter:
         oct_vol = OCTVolumeWithMetaData(
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         
         study = OCTStudy(

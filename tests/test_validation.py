@@ -57,8 +57,7 @@ class TestOctValidator:
     def test_validate_empty_volume(self):
         """Test validating empty volume."""
         oct_vol = OCTVolumeWithMetaData(
-            volume=[],
-            num_slices=0
+            volume=[]
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is False
@@ -70,8 +69,7 @@ class TestOctValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=[0.1, 0.1, 0.1],
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is True
@@ -83,8 +81,7 @@ class TestOctValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=None,
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is True  # Still valid
@@ -129,8 +126,7 @@ class TestStudyValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=[0.1, 0.1, 0.1],
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         fundus = FundusImageWithMetaData(
             image=np.zeros((100, 100, 3), dtype=np.uint8),
