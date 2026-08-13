@@ -282,6 +282,42 @@ class TestConversionServiceE2E:
         with pytest.raises(ConversionServiceError):
             batch.convert_batch(requests, continue_on_error=False)
 
+    def test_e_skipped_output_failure_reporting(self, fake_fds_file, tmp_path, monkeypatch, capsys):
+        """TEST E: Unproduced/skipped requested output results in failure with actionable error messages."""
+        mock_reader = MagicMock()
+        mock_reader.read_oct_volume.side_effect = Exception("No OCT data")
+        mock_reader.read_fundus_image.side_effect = Exception("No Fundus data")
+        mock_reader.read_all_metadata.return_value = {}
+
+        monkeypatch.setattr("oct_converter_app.pipeline.detect_format", lambda p: "fds")
+        monkeypatch.setattr(
+            "oct_converter_app.pipeline.ReaderFactory.create", lambda fmt, path: mock_reader
+        )
+
+        output_dir = tmp_path / "out_skipped"
+        service = ConversionService()
+        req = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["npy"],
+            validate=False,
+        )
+
+        res = service.convert(req)
+
+        assert res.success is False
+        assert len(res.failures) > 0
+        assert any("npy" in f or "not produced" in f or "No output files" in f for f in res.failures)
+
+        # Verify CLI behavior
+        capsys.readouterr()
+        exit_code = cli_main([str(fake_fds_file), str(output_dir), "--npy", "--no-validate"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "ERROR:" in captured.err
+        assert "npy" in captured.err or "not produced" in captured.err
+
 
 class TestErrorHierarchy:
     """Tests for exception hierarchy."""

@@ -149,6 +149,15 @@ class ConversionService:
             # Success requires generating files and having no skipped requested outputs
             success = len(generated_files) > 0 and len(skipped_outputs) == 0
 
+            failures = []
+            if not success:
+                if len(generated_files) == 0:
+                    failures.append("No output files were generated for the request.")
+                for skipped_out in skipped_outputs:
+                    failures.append(
+                        f"Requested output format '{skipped_out}' was not produced."
+                    )
+
             return ConversionResult.from_study(
                 study=study,
                 success=success,
@@ -156,7 +165,7 @@ class ConversionService:
                 requested_outputs=list(request.outputs),
                 output_dir=output_dir,
                 skipped_outputs=skipped_outputs,
-                failures=[],
+                failures=failures,
                 started_at=started_at,
                 completed_at=completed_at,
             )

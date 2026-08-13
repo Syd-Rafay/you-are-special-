@@ -25,29 +25,6 @@ class ExtractionError(RuntimeError):
     pass
 
 
-class ProcessingPipeline:
-    """Main processing pipeline for OCT file conversion.
-
-    Orchestrates the complete workflow:
-    1. Validate input file
-    2. Detect format
-    3. Create reader
-    4. Extract OCT volume and fundus image
-    5. Collect metadata
-    6. Validate extracted data
-    7. Route to exporters
-    8. Return results
-
-    The pipeline extracts data ONCE and shares it across in-memory exporters
-    (NPY, images, metadata). Note: The DICOM exporter is currently an exception
-    to single-pass processing because it delegates to create_dicom_from_oct(),
-    which re-parses the source file to execute the validated DICOM metadata extraction pipeline.
-
-    Attributes:
-        compute_hash: Whether to compute SHA-256 hash of source file.
-        reader_version: Version string to record in provenance.
-    """
-
 @dataclass
 class PipelineResult:
     """Result of processing pipeline execution containing study and created files."""

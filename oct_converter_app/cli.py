@@ -188,8 +188,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"WARNING: {warning}", file=sys.stderr)
 
         if not result.success:
-            for failure in result.failures:
-                print(f"ERROR: {failure}", file=sys.stderr)
+            if result.failures:
+                for failure in result.failures:
+                    print(f"ERROR: {failure}", file=sys.stderr)
+            else:
+                print(f"ERROR: Conversion failed for {args.input_file.name}", file=sys.stderr)
             return 1
 
         if args.verbose:
