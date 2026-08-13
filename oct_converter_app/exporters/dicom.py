@@ -91,7 +91,18 @@ class DicomExporter(BaseExporter):
         """
         output_path = self._ensure_output_dir(output_dir)
 
-        # Apply any option overrides
+        # Apply any option overrides (pop overwrite so it isn't passed to create_dicom_from_oct)
+        options_copy = dict(options) if options else {}
+        overwrite = options_copy.pop("overwrite", True)
+
+        if not overwrite:
+            stem = study.source_path.stem
+            existing_dicoms = list(output_path.glob(f"{stem}*.dcm"))
+            if existing_dicoms:
+                raise ExportError(
+                    f"File already exists and overwrite is disabled: {existing_dicoms[0]}"
+                )
+
         kwargs = {
             "rows": self.rows,
             "cols": self.cols,
@@ -101,8 +112,7 @@ class DicomExporter(BaseExporter):
             "scalex": self.scalex,
             "slice_thickness": self.slice_thickness,
         }
-        if options:
-            kwargs.update(options)
+        kwargs.update(options_copy)
 
         try:
             # Delegate to existing validated DICOM conversion

@@ -55,6 +55,8 @@ class ConversionResult:
         study: Any,
         success: bool,
         generated_files: list[Path],
+        requested_outputs: list[str] | None = None,
+        output_dir: Path | str | None = None,
         skipped_outputs: list[str] | None = None,
         failures: list[str] | None = None,
         started_at: datetime | None = None,
@@ -66,6 +68,8 @@ class ConversionResult:
             study: The OCTStudy from the application layer.
             success: Overall success status.
             generated_files: List of created file paths.
+            requested_outputs: List of requested output formats.
+            output_dir: Requested output directory.
             skipped_outputs: List of skipped output formats.
             failures: List of failure messages.
             started_at: When processing started.
@@ -74,12 +78,17 @@ class ConversionResult:
         Returns:
             ConversionResult instance.
         """
+        resolved_output_dir = (
+            Path(output_dir)
+            if output_dir is not None
+            else (generated_files[0].parent if generated_files else Path.cwd())
+        )
         return cls(
             success=success,
             input_path=study.source_path,
-            output_dir=generated_files[0].parent if generated_files else Path.cwd(),
+            output_dir=resolved_output_dir,
             detected_format=study.source_format,
-            requested_outputs=[],  # Will be set by caller
+            requested_outputs=requested_outputs.copy() if requested_outputs else [],
             generated_files=generated_files,
             skipped_outputs=skipped_outputs or [],
             failures=failures or [],

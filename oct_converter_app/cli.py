@@ -10,10 +10,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from oct_converter_app.detector import FormatDetector, UnsupportedFormatError
-from oct_converter_app.exporters.base import ExportError
-from oct_converter_app.factory import ReaderCreationError
-from oct_converter_app.pipeline import ExtractionError, ProcessingPipeline, ValidationError
+from oct_converter_app.detector import FormatDetector
+from oct_converter_service import (
+    ConversionRequest,
+    ConversionService,
+    ConversionServiceError,
+)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -78,6 +80,11 @@ def create_parser() -> argparse.ArgumentParser:
         default="png",
         choices=["png", "jpg", "tiff"],
         help="Image format for --images export (default: png)",
+    )
+    options_group.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files if present",
     )
     options_group.add_argument(
         "--no-validate",
@@ -155,88 +162,53 @@ def main(argv: list[str] | None = None) -> int:
         if args.verbose:
             print("Note: No output format specified, defaulting to metadata only.")
 
-    # Validate input file
-    if not args.input_file.exists():
-        print(f"ERROR: Input file not found: {args.input_file}", file=sys.stderr)
-        return 1
-
-    if not args.input_file.is_file():
-        print(f"ERROR: Input path is not a file: {args.input_file}", file=sys.stderr)
-        return 1
-
-    # Check format support early
-    try:
-        format_name = FormatDetector.detect(args.input_file)
-        if args.verbose:
-            print(f"Detected format: {format_name}")
-    except FileNotFoundError:
-        print(f"ERROR: File not found: {args.input_file}", file=sys.stderr)
-        return 1
-    except UnsupportedFormatError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
-
     # Build exporter options
     exporter_options = {}
     if "images" in outputs:
         exporter_options["images"] = {"format": args.image_format}
 
-    # Run pipeline
+    # Build service conversion request
     try:
-        pipeline = ProcessingPipeline(compute_hash=args.compute_hash)
-
-        study = pipeline.process(
+        request = ConversionRequest(
             input_path=args.input_file,
             output_dir=args.output_dir,
             outputs=outputs,
-            exporter_options=exporter_options,
+            overwrite=args.overwrite,
             validate=not args.no_validate,
             continue_on_warning=not args.stop_on_warning,
+            compute_hash=args.compute_hash,
+            exporter_options=exporter_options,
         )
 
-        # Report results
+        service = ConversionService()
+        result = service.convert(request)
+
+        if result.warnings:
+            for warning in result.warnings:
+                print(f"WARNING: {warning}", file=sys.stderr)
+
+        if not result.success:
+            for failure in result.failures:
+                print(f"ERROR: {failure}", file=sys.stderr)
+            return 1
+
         if args.verbose:
             print(f"\nProcessing complete for: {args.input_file}")
-            print(f"  Format: {study.source_format}")
-            if study.volume_dimensions:
-                print(f"  OCT volume: {study.volume_dimensions[0]} slices, "
-                      f"{study.volume_dimensions[1]}x{study.volume_dimensions[2]}")
-            if study.fundus_dimensions:
-                print(f"  Fundus: {study.fundus_dimensions[0]}x{study.fundus_dimensions[1]}")
-            if study.patient_id:
-                print(f"  Patient ID: {study.patient_id}")
-            if study.laterality:
-                print(f"  Laterality: {study.laterality}")
-
-        if study.warnings:
-            for warning in study.warnings:
-                print(f"WARNING: {warning}", file=sys.stderr)
+            if result.detected_format:
+                print(f"  Format: {result.detected_format}")
+            print(f"  Generated {len(result.generated_files)} file(s)")
 
         print(f"\nSuccessfully processed: {args.input_file.name}")
         return 0
 
-    except FileNotFoundError as e:
+    except ConversionServiceError as e:
         print(f"ERROR: {e}", file=sys.stderr)
-        return 1
-    except UnsupportedFormatError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
-    except ReaderCreationError as e:
-        print(f"ERROR: Failed to create reader: {e}", file=sys.stderr)
-        return 1
-    except ExtractionError as e:
-        print(f"ERROR: Extraction failed: {e}", file=sys.stderr)
-        return 1
-    except ValidationError as e:
-        print(f"ERROR: Validation failed: {e}", file=sys.stderr)
-        return 1
-    except ExportError as e:
-        print(f"ERROR: Export failed: {e}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"ERROR: Unexpected error: {e}", file=sys.stderr)
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         return 1
 

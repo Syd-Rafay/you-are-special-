@@ -6,6 +6,7 @@ Orchestrates the complete workflow from input file to multiple outputs.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,37 @@ class ExtractionError(RuntimeError):
     """Raised when data extraction fails."""
 
     pass
+
+
+class ProcessingPipeline:
+    """Main processing pipeline for OCT file conversion.
+
+    Orchestrates the complete workflow:
+    1. Validate input file
+    2. Detect format
+    3. Create reader
+    4. Extract OCT volume and fundus image
+    5. Collect metadata
+    6. Validate extracted data
+    7. Route to exporters
+    8. Return results
+
+    The pipeline extracts data ONCE and shares it across in-memory exporters
+    (NPY, images, metadata). Note: The DICOM exporter is currently an exception
+    to single-pass processing because it delegates to create_dicom_from_oct(),
+    which re-parses the source file to execute the validated DICOM metadata extraction pipeline.
+
+    Attributes:
+        compute_hash: Whether to compute SHA-256 hash of source file.
+        reader_version: Version string to record in provenance.
+    """
+
+@dataclass
+class PipelineResult:
+    """Result of processing pipeline execution containing study and created files."""
+
+    study: OCTStudy
+    created_files: list[Path]
 
 
 class ProcessingPipeline:
@@ -72,36 +104,48 @@ class ProcessingPipeline:
     ) -> OCTStudy:
         """Process an OCT file and export to specified formats.
 
-        This is the main entry point for batch processing.
+        Returns:
+            OCTStudy containing extracted data and processing results.
+        """
+        result = self.process_with_outputs(
+            input_path=input_path,
+            output_dir=output_dir,
+            outputs=outputs,
+            exporter_options=exporter_options,
+            validate=validate,
+            continue_on_warning=continue_on_warning,
+        )
+        return result.study
+
+    def process_with_outputs(
+        self,
+        input_path: Path | str,
+        output_dir: Path | str,
+        outputs: list[str] | None = None,
+        exporter_options: dict[str, dict] | None = None,
+        validate: bool = True,
+        continue_on_warning: bool = True,
+        compute_hash: bool | None = None,
+    ) -> PipelineResult:
+        """Process an OCT file and return PipelineResult containing study and created files.
 
         Args:
             input_path: Path to input OCT file.
             output_dir: Directory for output files.
             outputs: List of output formats to generate.
-                     Options: 'dicom', 'npy', 'images', 'metadata'
-                     Default: ['metadata'] (just extract and validate)
             exporter_options: Per-exporter configuration options.
-                              Dict mapping exporter name to options dict.
-            validate: Whether to validate extracted data before export (default: True).
-                      Setting validate=False explicitly bypasses safety validation checks
-                      (e.g., empty volumes or missing data) and attempts export regardless of data validity.
+            validate: Whether to validate extracted data before export.
             continue_on_warning: Whether to continue if validation has warnings.
+            compute_hash: Optional override for computing source file SHA-256 hash.
 
         Returns:
-            OCTStudy containing extracted data and processing results.
-
-        Raises:
-            FileNotFoundError: If input file does not exist.
-            UnsupportedFormatError: If file format is not supported.
-            ReaderCreationError: If reader cannot be created.
-            ExtractionError: If data extraction fails.
-            ValidationError: If validation fails (when validate=True).
-            ExportError: If export fails.
+            PipelineResult with study and created_files list.
         """
         input_path = Path(input_path)
         output_dir = Path(output_dir)
         outputs = outputs or ["metadata"]
         exporter_options = exporter_options or {}
+        should_compute_hash = self.compute_hash if compute_hash is None else compute_hash
 
         # Step 1: Validate input
         if not input_path.exists():
@@ -151,7 +195,7 @@ class ProcessingPipeline:
         provenance = Provenance.create(
             source_path=input_path,
             source_format=format_name,
-            compute_hash=self.compute_hash,
+            compute_hash=should_compute_hash,
             reader_version=self.reader_version,
         )
 
@@ -206,7 +250,7 @@ class ProcessingPipeline:
             except Exception as e:
                 raise ExportError(f"Export '{output_name}' failed: {e}") from e
 
-        return study
+        return PipelineResult(study=study, created_files=created_files)
 
     def _extract_common_metadata(self, study: OCTStudy) -> dict[str, Any]:
         """Extract common metadata fields from study.
