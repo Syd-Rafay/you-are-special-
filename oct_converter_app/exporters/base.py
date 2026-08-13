@@ -5,6 +5,7 @@ This module defines the abstract base class for all output exporters.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -15,6 +16,41 @@ class ExportError(RuntimeError):
     """Raised when an export operation fails."""
 
     pass
+
+
+def sanitize_path_component(name: str | None, default: str = "unknown") -> str:
+    """Sanitize a string for safe use as a single filesystem path component (filename or directory component).
+
+    Prevents directory traversal attacks (e.g. '../', '\', absolute paths, control characters)
+    while preserving valid patient IDs and filenames.
+
+    Args:
+        name: Raw string to sanitize (e.g. patient ID or custom filename).
+        default: Fallback string if name is empty, None, or fully invalid (default: 'unknown').
+
+    Returns:
+        Sanitized string containing no path separators, control characters, or relative traversal segments.
+    """
+    if name is None:
+        return default
+
+    s = str(name)
+    # Remove null bytes and control characters (ASCII 0-31, 127)
+    s = re.sub(r"[\x00-\x1f\x7f]", "", s)
+    # Replace path separators and reserved characters with underscores
+    s = re.sub(r'[\\/:*?"<>|]', "_", s)
+    # Strip leading/trailing whitespace and dots
+    s = s.strip(" .")
+    # Remove any remaining leading dots
+    while s.startswith("."):
+        s = s.lstrip(".")
+    s = s.strip(" .")
+
+    if not s:
+        return default
+
+    return s
+
 
 
 class BaseExporter(ABC):

@@ -12,7 +12,7 @@ class TestReaderFactory:
     def test_create_fds_reader(self, tmp_path):
         """Test creating FDS reader."""
         fds_file = tmp_path / "test.fds"
-        fds_file.write_bytes(b"fake fds content")
+        fds_file.write_bytes(b"\x00" * 100)
         # Should create without error (may fail on actual read)
         reader = ReaderFactory.create("fds", fds_file)
         assert reader is not None
@@ -20,14 +20,14 @@ class TestReaderFactory:
     def test_create_fda_reader(self, tmp_path):
         """Test creating FDA reader."""
         fda_file = tmp_path / "test.fda"
-        fda_file.write_bytes(b"fake fda content")
+        fda_file.write_bytes(b"\x00" * 100)
         reader = ReaderFactory.create("fda", fda_file)
         assert reader is not None
 
     def test_create_e2e_reader(self, tmp_path):
         """Test creating E2E reader."""
         e2e_file = tmp_path / "test.e2e"
-        e2e_file.write_bytes(b"fake e2e content")
+        e2e_file.write_bytes(b"\x00" * 100)
         reader = ReaderFactory.create("e2e", e2e_file)
         assert reader is not None
 

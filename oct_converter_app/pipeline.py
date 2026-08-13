@@ -37,8 +37,10 @@ class ProcessingPipeline:
     7. Route to exporters
     8. Return results
 
-    The pipeline extracts data ONCE and shares it across all exporters,
-    avoiding redundant file parsing.
+    The pipeline extracts data ONCE and shares it across in-memory exporters
+    (NPY, images, metadata). Note: The DICOM exporter is currently an exception
+    to single-pass processing because it delegates to create_dicom_from_oct(),
+    which re-parses the source file to execute the validated DICOM metadata extraction pipeline.
 
     Attributes:
         compute_hash: Whether to compute SHA-256 hash of source file.
@@ -80,7 +82,9 @@ class ProcessingPipeline:
                      Default: ['metadata'] (just extract and validate)
             exporter_options: Per-exporter configuration options.
                               Dict mapping exporter name to options dict.
-            validate: Whether to validate extracted data before export.
+            validate: Whether to validate extracted data before export (default: True).
+                      Setting validate=False explicitly bypasses safety validation checks
+                      (e.g., empty volumes or missing data) and attempts export regardless of data validity.
             continue_on_warning: Whether to continue if validation has warnings.
 
         Returns:

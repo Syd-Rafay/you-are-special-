@@ -14,4 +14,12 @@ __pycache__/
 
 # Tests
 .test*
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
 ```
+# Local files
+.DS_Store
+**/.DS_Store
+test_data/

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-from oct_converter_app.exporters.base import BaseExporter, ExportError
+from oct_converter_app.exporters.base import BaseExporter, ExportError, sanitize_path_component
 from oct_converter_app.models import OCTStudy
 
 
@@ -64,7 +64,8 @@ class ImageExporter(BaseExporter):
             output_dir: Directory to write image files.
             options: Optional configuration.
                      Keys: 'prefix' to override default filename prefix,
-                           'format' to override instance format.
+                           'format' to override instance format,
+                           'overwrite' (bool, default True) whether to overwrite existing files.
 
         Returns:
             List of paths to created image files.
@@ -74,6 +75,7 @@ class ImageExporter(BaseExporter):
         """
         output_path = self._ensure_output_dir(output_dir)
         created_files = []
+        overwrite = options.get("overwrite", True) if options else True
 
         # Get format override from options
         img_format = options.get("format", self.format) if options else self.format
@@ -84,8 +86,10 @@ class ImageExporter(BaseExporter):
         if study.oct_volume is not None and study.oct_volume.volume:
             try:
                 prefix = options.get("prefix") if options else None
-                if not prefix:
-                    prefix = study.patient_id or "bscan"
+                if prefix:
+                    prefix = sanitize_path_component(prefix, default="bscan")
+                else:
+                    prefix = sanitize_path_component(study.patient_id, default="bscan")
 
                 # Create subdirectory for B-scans
                 bscan_dir = output_path / f"{prefix}_bscans"
@@ -93,9 +97,17 @@ class ImageExporter(BaseExporter):
 
                 num_digits = len(str(len(study.oct_volume.volume)))
 
+                if not overwrite:
+                    first_file = bscan_dir / f"{prefix}_{0:0{num_digits}d}{img_format}"
+                    if first_file.exists():
+                        raise ExportError(f"File already exists and overwrite is disabled: {first_file}")
+
                 for i, scan in enumerate(study.oct_volume.volume):
                     filename = f"{prefix}_{i:0{num_digits}d}{img_format}"
                     filepath = bscan_dir / filename
+
+                    if not overwrite and filepath.exists():
+                        raise ExportError(f"File already exists and overwrite is disabled: {filepath}")
 
                     # Convert to 8-bit for display
                     if scan.dtype != np.uint8:
@@ -121,6 +133,8 @@ class ImageExporter(BaseExporter):
 
                     created_files.append(filepath)
 
+            except ExportError:
+                raise
             except Exception as e:
                 raise ExportError(f"Failed to export OCT B-scans: {e}") from e
 
@@ -128,11 +142,16 @@ class ImageExporter(BaseExporter):
         if study.fundus is not None and study.fundus.image.size > 0:
             try:
                 prefix = options.get("prefix") if options else None
-                if not prefix:
-                    prefix = study.patient_id or "fundus"
+                if prefix:
+                    prefix = sanitize_path_component(prefix, default="fundus")
+                else:
+                    prefix = sanitize_path_component(study.patient_id, default="fundus")
 
                 filename = f"{prefix}_fundus{img_format}"
                 filepath = output_path / filename
+
+                if not overwrite and filepath.exists():
+                    raise ExportError(f"File already exists and overwrite is disabled: {filepath}")
 
                 image = study.fundus.image
 
@@ -158,6 +177,8 @@ class ImageExporter(BaseExporter):
                 cv2.imwrite(str(filepath), image_bgr)
                 created_files.append(filepath)
 
+            except ExportError:
+                raise
             except Exception as e:
                 raise ExportError(f"Failed to export fundus image: {e}") from e
 
