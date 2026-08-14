@@ -1,4 +1,3 @@
-```
 # Python compiled files
 *.pyc
 __pycache__/
@@ -26,9 +25,16 @@ node_modules/
 coverage/
 htmlcov/
 
-# MyPy cache
+# MyPy & Pytest cache
 .mypy_cache/
-
-# Pytest cache
 .pytest_cache/
-```
+
+# Local files
+.DS_Store
+**/.DS_Store
+test_data/
+
+# Generated Python packaging metadata
+*.egg-info/
+build/
+dist/

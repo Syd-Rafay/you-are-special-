@@ -170,6 +170,13 @@ New additions:
 
 Exporters continue to consume `OCTStudy` objects without modification. The `capabilities` property now returns `StudyCapabilities` instead of the legacy `Capabilities` class, but both classes share the same core fields for backward compatibility.
 
+### Legacy Capabilities Compatibility
+
+- **Backward Compatibility**: `Capabilities` is retained for backward compatibility so existing callers and imports using `Capabilities` continue to work without breaking changes.
+- **Canonical Class**: `StudyCapabilities` is the current canonical capability representation.
+- **Usage Recommendation**: New code should prefer `OCTStudy.capabilities` and `StudyCapabilities`.
+
+
 ## External Reuse
 
 **eyepy reference**: Used as a design reference only. No code was copied or adapted from eyepy. No dependency added.
