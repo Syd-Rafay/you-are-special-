@@ -67,7 +67,7 @@ class ConversionRequest:
                 errors.append(f"Output path exists but is not a directory: {output_dir}")
 
         # Validate outputs list
-        valid_outputs = {"dicom", "npy", "images", "metadata"}
+        valid_outputs = {"dicom", "npy", "images", "metadata", "zarr"}
         if not self.outputs:
             errors.append("At least one output format must be specified")
         else:
