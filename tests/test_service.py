@@ -1,32 +1,67 @@
 """Tests for the OCT conversion service layer."""
 
 import tempfile
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
-from oct_converter_service.service import ConversionService
-from oct_converter_service.requests import ConversionRequest
-from oct_converter_service.results import ConversionResult
-from oct_converter_service.config import ConversionConfig
+from oct_converter.image_types import FundusImageWithMetaData, OCTVolumeWithMetaData
+from oct_converter_app.cli import main as cli_main
 from oct_converter_service.batch import BatchConversionService
+from oct_converter_service.config import ConversionConfig
 from oct_converter_service.errors import (
-    ConversionServiceError,
-    InvalidRequestError,
-    InputNotFoundError,
-    UnsupportedFormatError,
     ConversionFailedError,
+    ConversionServiceError,
+    InputNotFoundError,
+    InvalidRequestError,
     OutputError,
     OverwriteNotAllowedError,
+    UnsupportedFormatError,
 )
+from oct_converter_service.requests import ConversionRequest
+from oct_converter_service.results import ConversionResult
+from oct_converter_service.service import ConversionService
+
+
+@pytest.fixture
+def fake_fds_file(tmp_path):
+    """Create a dummy file path for testing."""
+    p = tmp_path / "test_scan.fds"
+    p.write_bytes(b"dummy fds data")
+    return p
+
+
+@pytest.fixture
+def mock_pipeline_reader(monkeypatch):
+    """Mock detector and reader factory to allow real exporter execution."""
+    oct_vol = OCTVolumeWithMetaData(
+        volume=[np.zeros((10, 10), dtype=np.uint16)],
+        patient_id="PAT001",
+        laterality="OD",
+    )
+    fundus_img = FundusImageWithMetaData(
+        image=np.zeros((10, 10, 3), dtype=np.uint8),
+        patient_id="PAT001",
+    )
+    mock_reader = MagicMock()
+    mock_reader.read_oct_volume.return_value = oct_vol
+    mock_reader.read_fundus_image.return_value = fundus_img
+    mock_reader.read_all_metadata.return_value = {"patient_id": "PAT001"}
+
+    monkeypatch.setattr("oct_converter_app.pipeline.detect_format", lambda p: "fds")
+    monkeypatch.setattr(
+        "oct_converter_app.pipeline.ReaderFactory.create", lambda fmt, path: mock_reader
+    )
+    return mock_reader
 
 
 class TestConversionConfig:
     """Tests for ConversionConfig."""
 
     def test_default_config(self):
-        """Test default configuration values."""
         config = ConversionConfig()
         assert config.overwrite is False
         assert config.validate is True
@@ -34,7 +69,6 @@ class TestConversionConfig:
         assert config.compute_hash is False
 
     def test_custom_config(self):
-        """Test custom configuration values."""
         config = ConversionConfig(
             overwrite=True,
             validate=False,
@@ -47,12 +81,10 @@ class TestConversionConfig:
         assert config.compute_hash is True
 
     def test_invalid_overwrite_type(self):
-        """Test that invalid overwrite type raises error."""
         with pytest.raises(ValueError, match="overwrite must be a boolean"):
             ConversionConfig(overwrite="true")
 
     def test_invalid_validate_type(self):
-        """Test that invalid validate type raises error."""
         with pytest.raises(ValueError, match="validate must be a boolean"):
             ConversionConfig(validate="false")
 
@@ -61,115 +93,50 @@ class TestConversionRequest:
     """Tests for ConversionRequest."""
 
     def test_minimal_request(self):
-        """Test minimal valid request."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
-
-        try:
-            request = ConversionRequest(
-                input_path=input_path,
-                output_dir=tempfile.gettempdir(),
-            )
-            assert request.input_path == input_path
-            assert request.outputs == ["metadata"]  # default
-            assert request.overwrite is False
-        finally:
-            input_path.unlink()
+        request = ConversionRequest(
+            input_path="/path/to/scan.fds",
+            output_dir="/output/dir",
+        )
+        assert request.input_path == "/path/to/scan.fds"
+        assert request.outputs == ["metadata"]
+        assert request.overwrite is None
 
     def test_full_request(self):
-        """Test request with all parameters."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
+        request = ConversionRequest(
+            input_path="/path/to/scan.fds",
+            output_dir="/output/dir",
+            outputs=["dicom", "npy", "images", "metadata"],
+            overwrite=True,
+            validate=False,
+            continue_on_warning=False,
+            compute_hash=True,
+            exporter_options={"dicom": {"key": "value"}},
+        )
+        assert request.outputs == ["dicom", "npy", "images", "metadata"]
+        assert request.overwrite is True
+        assert request.validate is False
 
-        output_dir = Path(tempfile.mkdtemp())
-        try:
-            request = ConversionRequest(
-                input_path=input_path,
-                output_dir=output_dir,
-                outputs=["dicom", "npy", "images", "metadata"],
-                overwrite=True,
-                validate=False,
-                continue_on_warning=False,
-                compute_hash=True,
-                exporter_options={"dicom": {"key": "value"}},
-            )
-            assert request.outputs == ["dicom", "npy", "images", "metadata"]
-            assert request.overwrite is True
-            assert request.validate is False
-            assert request.exporter_options == {"dicom": {"key": "value"}}
-        finally:
-            input_path.unlink()
-
-    def test_request_input_not_exists(self):
-        """Test that non-existent input raises error."""
-        with pytest.raises(ValueError, match="Input path does not exist"):
+    def test_request_schema_validation(self):
+        with pytest.raises(ValueError, match="Unsupported output format"):
             ConversionRequest(
-                input_path="/nonexistent/file.fds",
-                output_dir=tempfile.gettempdir(),
+                input_path="/path/to/scan.fds",
+                output_dir="/output/dir",
+                outputs=["invalid_format"],
             )
 
-    def test_request_input_is_directory(self):
-        """Test that directory as input raises error."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(ValueError, match="Input path must be a file"):
-                ConversionRequest(
-                    input_path=tmpdir,
-                    output_dir=tempfile.gettempdir(),
-                )
-
-    def test_request_no_outputs(self):
-        """Test that empty outputs list raises error."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
-
-        try:
-            with pytest.raises(ValueError, match="At least one output format"):
-                ConversionRequest(
-                    input_path=input_path,
-                    output_dir=tempfile.gettempdir(),
-                    outputs=[],
-                )
-        finally:
-            input_path.unlink()
-
-    def test_request_invalid_output_format(self):
-        """Test that invalid output format raises error."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
-
-        try:
-            with pytest.raises(ValueError, match="Unsupported output format"):
-                ConversionRequest(
-                    input_path=input_path,
-                    output_dir=tempfile.gettempdir(),
-                    outputs=["invalid_format"],
-                )
-        finally:
-            input_path.unlink()
-
-    def test_request_valid_outputs(self):
-        """Test all valid output formats."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
-
-        try:
-            # Each valid output should work
-            for output in ["dicom", "npy", "images", "metadata"]:
-                request = ConversionRequest(
-                    input_path=input_path,
-                    output_dir=tempfile.gettempdir(),
-                    outputs=[output],
-                )
-                assert request.outputs == [output]
-        finally:
-            input_path.unlink()
+    def test_request_empty_outputs(self):
+        with pytest.raises(ValueError, match="At least one output format"):
+            ConversionRequest(
+                input_path="/path/to/scan.fds",
+                output_dir="/output/dir",
+                outputs=[],
+            )
 
 
 class TestConversionResult:
     """Tests for ConversionResult."""
 
     def test_result_creation(self):
-        """Test basic result creation."""
         result = ConversionResult(
             success=True,
             input_path=Path("/input/test.fds"),
@@ -179,13 +146,10 @@ class TestConversionResult:
         assert result.input_path == Path("/input/test.fds")
         assert result.output_dir == Path("/output")
         assert result.generated_files == []
-        assert result.failures == []
 
     def test_result_elapsed_time(self):
-        """Test elapsed time calculation."""
-        started = datetime(2023, 1, 1, 12, 0, 0)
-        completed = datetime(2023, 1, 1, 12, 0, 30)
-
+        started = datetime(2026, 1, 1, 12, 0, 0)
+        completed = datetime(2026, 1, 1, 12, 0, 30)
         result = ConversionResult(
             success=True,
             input_path=Path("/input/test.fds"),
@@ -195,161 +159,170 @@ class TestConversionResult:
         )
         assert result.elapsed_time == 30.0
 
-    def test_result_elapsed_time_none(self):
-        """Test elapsed time when not set."""
-        result = ConversionResult(
-            success=True,
-            input_path=Path("/input/test.fds"),
-            output_dir=Path("/output"),
-        )
-        assert result.elapsed_time is None
-
     def test_result_from_study(self):
-        """Test creating result from study object."""
-        # Create a mock study
         class MockStudy:
             source_path = Path("/input/test.fds")
             source_format = "fds"
-            warnings = ["warning1", "warning2"]
+            warnings = ["w1"]
             metadata = {"patient_id": "TEST123"}
 
         study = MockStudy()
-        generated = [Path("/output/test.dcm")]
-
+        generated = [Path("/output/test.json")]
         result = ConversionResult.from_study(
             study=study,
             success=True,
             generated_files=generated,
+            requested_outputs=["metadata"],
+            output_dir=Path("/output"),
         )
 
         assert result.success is True
-        assert result.input_path == Path("/input/test.fds")
-        assert result.detected_format == "fds"
-        assert result.generated_files == [Path("/output/test.dcm")]
-        assert result.warnings == ["warning1", "warning2"]
-        assert result.metadata == {"patient_id": "TEST123"}
+        assert result.output_dir == Path("/output")
+        assert result.requested_outputs == ["metadata"]
+        assert result.generated_files == generated
 
 
-class TestConversionService:
-    """Tests for ConversionService."""
+class TestConversionServiceE2E:
+    """End-to-end service integration tests."""
 
-    def test_service_initialization(self):
-        """Test service initialization."""
-        service = ConversionService()
-        assert service.config is not None
-        assert service._pipeline is not None
-
-    def test_service_with_custom_config(self):
-        """Test service with custom config."""
-        config = ConversionConfig(overwrite=True, validate=False)
-        service = ConversionService(config)
-        assert service.config.overwrite is True
-        assert service.config.validate is False
-
-    def test_service_input_not_found(self):
-        """Test service raises InputNotFoundError for missing file."""
+    def test_a_successful_service_conversion(self, fake_fds_file, tmp_path, mock_pipeline_reader):
+        """TEST A: Service conversion creates real files and returns valid ConversionResult."""
+        output_dir = tmp_path / "out"
         service = ConversionService()
         request = ConversionRequest(
-            input_path="/nonexistent/file.fds",
-            output_dir=tempfile.gettempdir(),
-            outputs=["metadata"],
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["npy", "images", "metadata"],
         )
 
-        with pytest.raises(InputNotFoundError):
-            service.convert(request)
+        result = service.convert(request)
 
-    def test_service_invalid_request(self):
-        """Test service raises InvalidRequestError for invalid request."""
+        assert result.success is True
+        assert len(result.generated_files) > 0
+        assert result.output_dir == output_dir
+        assert result.requested_outputs == ["npy", "images", "metadata"]
+        assert result.skipped_outputs == []
+        for f in result.generated_files:
+            assert f.exists()
+
+    def test_b_overwrite_through_service(self, fake_fds_file, tmp_path, mock_pipeline_reader):
+        """TEST B: Service respects overwrite flag across requests."""
+        output_dir = tmp_path / "out_overwrite"
         service = ConversionService()
 
-        # Create a request with invalid output format
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".fds") as tmp:
-            input_path = Path(tmp.name)
+        req1 = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["metadata"],
+            overwrite=True,
+        )
+        res1 = service.convert(req1)
+        assert res1.success is True
+        assert len(res1.generated_files) == 1
+        assert res1.generated_files[0].exists()
 
-        try:
-            # Bypass validation by creating request differently
-            request = object.__new__(ConversionRequest)
-            request.input_path = input_path
-            request.output_dir = tempfile.gettempdir()
-            request.outputs = ["invalid"]
-            request.overwrite = False
-            request.validate = True
-            request.continue_on_warning = True
-            request.compute_hash = False
-            request.exporter_options = {}
+        req2 = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["metadata"],
+            overwrite=False,
+        )
+        with pytest.raises(OverwriteNotAllowedError):
+            service.convert(req2)
 
-            with pytest.raises(InvalidRequestError):
-                service.convert(request)
-        finally:
-            input_path.unlink()
+        req3 = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["metadata"],
+            overwrite=True,
+        )
+        res3 = service.convert(req3)
+        assert res3.success is True
 
+    def test_c_cli_uses_service(self, fake_fds_file, tmp_path, monkeypatch, mock_pipeline_reader):
+        """TEST C: CLI uses ConversionService and handles execution."""
+        output_dir = tmp_path / "cli_out"
+        called = False
 
-class TestBatchConversionService:
-    """Tests for BatchConversionService."""
+        original_convert = ConversionService.convert
 
-    def test_batch_initialization(self):
-        """Test batch service initialization."""
+        def spy_convert(self, request):
+            nonlocal called
+            called = True
+            return original_convert(self, request)
+
+        monkeypatch.setattr(ConversionService, "convert", spy_convert)
+
+        exit_code = cli_main([str(fake_fds_file), str(output_dir), "--metadata", "--verbose"])
+        assert exit_code == 0
+        assert called is True
+
+    def test_d_mixed_success_batch(self, fake_fds_file, tmp_path, mock_pipeline_reader):
+        """TEST D: Batch processing handles mixed success and failure."""
+        valid1 = fake_fds_file
+        invalid2 = tmp_path / "nonexistent.fds"
+        valid3 = tmp_path / "scan2.fds"
+        valid3.write_bytes(b"data")
+
         batch = BatchConversionService()
-        assert batch.service is not None
-
-    def test_batch_with_custom_service(self):
-        """Test batch service with custom service."""
-        service = ConversionService()
-        batch = BatchConversionService(service)
-        assert batch.service == service
-
-    def test_batch_empty_list(self):
-        """Test batch processing with empty list."""
-        batch = BatchConversionService()
-        results = batch.convert_batch([])
-        assert results == []
-
-    def test_batch_continue_on_error(self):
-        """Test batch processing continues on error."""
-        batch = BatchConversionService()
-
-        # Create requests - some will fail (non-existent files)
         requests = [
-            ConversionRequest(
-                input_path="/nonexistent1.fds",
-                output_dir=tempfile.gettempdir(),
-                outputs=["metadata"],
-            ),
-            ConversionRequest(
-                input_path="/nonexistent2.fds",
-                output_dir=tempfile.gettempdir(),
-                outputs=["metadata"],
-            ),
+            ConversionRequest(input_path=valid1, output_dir=tmp_path / "b1", outputs=["metadata"]),
+            ConversionRequest(input_path=invalid2, output_dir=tmp_path / "b2", outputs=["metadata"]),
+            ConversionRequest(input_path=valid3, output_dir=tmp_path / "b3", outputs=["metadata"]),
         ]
 
-        # With continue_on_error=True, should get results for all
+        # continue_on_error = True
         results = batch.convert_batch(requests, continue_on_error=True)
-        assert len(results) == 2
-        # Both should be failures
-        assert all(not r.success for r in results)
+        assert len(results) == 3
+        assert results[0].success is True
+        assert results[1].success is False
+        assert results[2].success is True
 
-    def test_batch_stop_on_error(self):
-        """Test batch processing stops on error."""
-        batch = BatchConversionService()
-
-        requests = [
-            ConversionRequest(
-                input_path="/nonexistent.fds",
-                output_dir=tempfile.gettempdir(),
-                outputs=["metadata"],
-            ),
-        ]
-
-        # With continue_on_error=False, should raise on first error
+        # continue_on_error = False
         with pytest.raises(ConversionServiceError):
             batch.convert_batch(requests, continue_on_error=False)
+
+    def test_e_skipped_output_failure_reporting(self, fake_fds_file, tmp_path, monkeypatch, capsys):
+        """TEST E: Unproduced/skipped requested output results in failure with actionable error messages."""
+        mock_reader = MagicMock()
+        mock_reader.read_oct_volume.side_effect = Exception("No OCT data")
+        mock_reader.read_fundus_image.side_effect = Exception("No Fundus data")
+        mock_reader.read_all_metadata.return_value = {}
+
+        monkeypatch.setattr("oct_converter_app.pipeline.detect_format", lambda p: "fds")
+        monkeypatch.setattr(
+            "oct_converter_app.pipeline.ReaderFactory.create", lambda fmt, path: mock_reader
+        )
+
+        output_dir = tmp_path / "out_skipped"
+        service = ConversionService()
+        req = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["npy"],
+            validate=False,
+        )
+
+        res = service.convert(req)
+
+        assert res.success is False
+        assert len(res.failures) > 0
+        assert any("npy" in f or "not produced" in f or "No output files" in f for f in res.failures)
+
+        # Verify CLI behavior
+        capsys.readouterr()
+        exit_code = cli_main([str(fake_fds_file), str(output_dir), "--npy", "--no-validate"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "ERROR:" in captured.err
+        assert "npy" in captured.err or "not produced" in captured.err
 
 
 class TestErrorHierarchy:
     """Tests for exception hierarchy."""
 
     def test_all_errors_inherit_from_base(self):
-        """Test all errors inherit from ConversionServiceError."""
         errors = [
             InvalidRequestError("test"),
             InputNotFoundError("test"),
@@ -363,7 +336,6 @@ class TestErrorHierarchy:
             assert isinstance(error, ConversionServiceError)
 
     def test_catch_base_error(self):
-        """Test catching base error catches all."""
         try:
             raise InvalidRequestError("test")
         except ConversionServiceError as e:

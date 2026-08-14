@@ -74,12 +74,9 @@ class ConversionService:
         """
         started_at = datetime.now()
 
-        # Validate request (raises ValueError which we wrap)
+        # Validate request schema
         try:
-            # Force validation by accessing the validated fields
-            _ = request.input_path
-            _ = request.output_dir
-            _ = request.outputs
+            request.validate_request()
         except ValueError as e:
             raise InvalidRequestError(str(e)) from e
 
@@ -95,45 +92,80 @@ class ConversionService:
         if output_dir.exists() and not output_dir.is_dir():
             raise OutputError(f"Output path exists but is not a directory: {output_dir}")
 
+        # Resolve configuration precedence: explicit request > service config > default
+        overwrite = request.overwrite if request.overwrite is not None else self.config.overwrite
+        validate = request.validate if request.validate is not None else self.config.validate
+        continue_on_warning = (
+            request.continue_on_warning
+            if request.continue_on_warning is not None
+            else self.config.continue_on_warning
+        )
+        compute_hash = (
+            request.compute_hash
+            if request.compute_hash is not None
+            else self.config.compute_hash
+        )
+
+        # Build per-exporter options with overwrite propagation
+        merged_exporter_options: dict[str, dict] = {}
+        for out_format in request.outputs:
+            opts = {"overwrite": overwrite}
+            if out_format in request.exporter_options:
+                opts.update(request.exporter_options[out_format])
+            merged_exporter_options[out_format] = opts
+
         # Process through the application layer pipeline
         try:
-            study = self._pipeline.process(
+            pipeline_result = self._pipeline.process_with_outputs(
                 input_path=input_path,
                 output_dir=output_dir,
                 outputs=request.outputs,
-                exporter_options=request.exporter_options,
-                validate=request.validate,
-                continue_on_warning=request.continue_on_warning,
+                exporter_options=merged_exporter_options,
+                validate=validate,
+                continue_on_warning=continue_on_warning,
+                compute_hash=compute_hash,
             )
 
-            # Get generated files - check what was actually exported
-            generated_files = []
+            study = pipeline_result.study
+            generated_files = pipeline_result.created_files
+
+            # Determine skipped outputs by inspecting generated files against requested formats
             skipped_outputs = []
-            
-            # Track which outputs were requested vs what was generated
-            # The pipeline stores created files in the study's internal state
-            if hasattr(study, '_exported_files'):
-                generated_files = list(study._exported_files)
-            
-            # Determine skipped outputs by checking what exists
+            format_extensions = {
+                "dicom": {".dcm"},
+                "npy": {".npy"},
+                "images": {".png", ".jpg", ".jpeg", ".tiff"},
+                "metadata": {".json"},
+            }
+
             for output_name in request.outputs:
-                # Check if any file matching this output pattern was created
-                found = False
-                for f in generated_files:
-                    if output_name in f.name.lower() or f.suffix[1:] == output_name:
-                        found = True
-                        break
+                valid_exts = format_extensions.get(output_name, set())
+                found = any(f.suffix.lower() in valid_exts for f in generated_files)
                 if not found:
                     skipped_outputs.append(output_name)
 
             completed_at = datetime.now()
 
+            # Success requires generating files and having no skipped requested outputs
+            success = len(generated_files) > 0 and len(skipped_outputs) == 0
+
+            failures = []
+            if not success:
+                if len(generated_files) == 0:
+                    failures.append("No output files were generated for the request.")
+                for skipped_out in skipped_outputs:
+                    failures.append(
+                        f"Requested output format '{skipped_out}' was not produced."
+                    )
+
             return ConversionResult.from_study(
                 study=study,
-                success=len(generated_files) > 0 or len(skipped_outputs) == len(request.outputs),
+                success=success,
                 generated_files=generated_files,
+                requested_outputs=list(request.outputs),
+                output_dir=output_dir,
                 skipped_outputs=skipped_outputs,
-                failures=[],
+                failures=failures,
                 started_at=started_at,
                 completed_at=completed_at,
             )
@@ -145,6 +177,9 @@ class ConversionService:
         except AppValidationError as e:
             raise ConversionFailedError(f"Validation failed: {e}") from e
         except ExportError as e:
+            err_msg = str(e).lower()
+            if "overwrite" in err_msg or "already exists" in err_msg:
+                raise OverwriteNotAllowedError(str(e)) from e
             raise OutputError(str(e)) from e
         except Exception as e:
             # Wrap any other exception as a conversion failure

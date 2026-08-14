@@ -17,10 +17,10 @@ class ConversionRequest:
         output_dir: Directory where output files will be written.
         outputs: List of output formats to generate.
                  Valid options: 'dicom', 'npy', 'images', 'metadata'
-        overwrite: Whether to overwrite existing output files.
-        validate: Whether to validate extracted data before export.
-        continue_on_warning: Whether to continue if validation has warnings.
-        compute_hash: Whether to compute SHA-256 hash of source file.
+        overwrite: Optional override for overwriting existing output files.
+        validate: Optional override for validating extracted data before export.
+        continue_on_warning: Optional override for continuing if validation has warnings.
+        compute_hash: Optional override for computing SHA-256 hash of source file.
         exporter_options: Per-exporter configuration options.
                           Dict mapping exporter name to options dict.
     """
@@ -28,35 +28,43 @@ class ConversionRequest:
     input_path: Path | str
     output_dir: Path | str
     outputs: list[str] = field(default_factory=lambda: ["metadata"])
-    overwrite: bool = False
-    validate: bool = True
-    continue_on_warning: bool = True
-    compute_hash: bool = False
+    overwrite: bool | None = None
+    validate: bool | None = None
+    continue_on_warning: bool | None = None
+    compute_hash: bool | None = None
     exporter_options: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate the request after initialization."""
+        """Validate the request schema after initialization."""
+        self._validate()
+
+    def validate_request(self):
+        """Validate request parameters explicitly.
+
+        Raises:
+            ValueError: If any parameter is invalid.
+        """
         self._validate()
 
     def _validate(self):
-        """Validate request parameters.
+        """Validate request parameters schema.
 
         Raises:
             ValueError: If any parameter is invalid.
         """
         errors = []
 
-        # Validate input path
-        input_path = Path(self.input_path)
-        if not input_path.exists():
-            errors.append(f"Input path does not exist: {input_path}")
-        elif not input_path.is_file():
-            errors.append(f"Input path must be a file, not a directory: {input_path}")
+        # Validate input path presence and type
+        if not self.input_path:
+            errors.append("Input path must be provided")
 
-        # Validate output directory
-        output_dir = Path(self.output_dir)
-        if output_dir.exists() and not output_dir.is_dir():
-            errors.append(f"Output path exists but is not a directory: {output_dir}")
+        # Validate output directory type and non-file check
+        if not self.output_dir:
+            errors.append("Output directory must be provided")
+        else:
+            output_dir = Path(self.output_dir)
+            if output_dir.exists() and not output_dir.is_dir():
+                errors.append(f"Output path exists but is not a directory: {output_dir}")
 
         # Validate outputs list
         valid_outputs = {"dicom", "npy", "images", "metadata"}
@@ -70,15 +78,15 @@ class ConversionRequest:
                         f"Valid options: {sorted(valid_outputs)}"
                     )
 
-        # Validate boolean fields
-        if not isinstance(self.overwrite, bool):
-            errors.append("overwrite must be a boolean")
-        if not isinstance(self.validate, bool):
-            errors.append("validate must be a boolean")
-        if not isinstance(self.continue_on_warning, bool):
-            errors.append("continue_on_warning must be a boolean")
-        if not isinstance(self.compute_hash, bool):
-            errors.append("compute_hash must be a boolean")
+        # Validate optional boolean fields if set
+        if self.overwrite is not None and not isinstance(self.overwrite, bool):
+            errors.append("overwrite must be a boolean or None")
+        if self.validate is not None and not isinstance(self.validate, bool):
+            errors.append("validate must be a boolean or None")
+        if self.continue_on_warning is not None and not isinstance(self.continue_on_warning, bool):
+            errors.append("continue_on_warning must be a boolean or None")
+        if self.compute_hash is not None and not isinstance(self.compute_hash, bool):
+            errors.append("compute_hash must be a boolean or None")
 
         # Validate exporter_options is a dict
         if not isinstance(self.exporter_options, dict):
