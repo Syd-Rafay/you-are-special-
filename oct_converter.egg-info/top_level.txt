@@ -1,3 +1,5 @@
 examples
 oct_converter
 oct_converter_app
+oct_converter_service
+tests

@@ -1,9 +1,8 @@
 construct
+h5py
 imageio
-natsort
+matplotlib
 numpy
 opencv-python
 pydicom>3
-matplotlib
-imageio-ffmpeg
-h5py
+zarr>=3.0.0
