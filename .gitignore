@@ -1,25 +1,51 @@
 ```gitignore
-# Python compiled files
-*.pyc
+# Python cache files
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Logs and temporary files
+# Dependencies
+.venv/
+venv/
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
 *.log
-*.tmp
 
-# Environment files
+# Environment variables
 .env
 .env.local
-*.env.*
+.env.dev
+.env.prod
+.env.*
+!.env.example
 
-# Tests
-.test*
+# Testing
 .pytest_cache/
-.coverage
-coverage/
+.hypothesis/
+.coverage*
 htmlcov/
-```
-# Local files
+.cov/
+coverage/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
 .DS_Store
 **/.DS_Store
 test_data/
