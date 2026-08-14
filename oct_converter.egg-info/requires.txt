@@ -1,8 +1,0 @@
-construct
-h5py
-imageio
-matplotlib
-numpy
-opencv-python
-pydicom>3
-zarr>=3.0.0
