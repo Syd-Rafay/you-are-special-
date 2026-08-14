@@ -62,8 +62,7 @@ class TestCapabilities:
         # Create mock OCT volume
         oct_vol = OCTVolumeWithMetaData(
             volume=[np.zeros((100, 100), dtype=np.uint16)],
-            pixel_spacing=[0.1, 0.1, 0.1],
-            num_slices=1
+            pixel_spacing=[0.1, 0.1, 0.1]
         )
         
         study = OCTStudy(
@@ -105,8 +104,7 @@ class TestOCTStudy:
         
         oct_vol = OCTVolumeWithMetaData(
             volume=[np.zeros((100, 100), dtype=np.uint16)],
-            patient_id="TEST123",
-            num_slices=1
+            patient_id="TEST123"
         )
         
         study = OCTStudy(
@@ -147,8 +145,7 @@ class TestOCTStudy:
         
         # With OCT = no errors
         oct_vol = OCTVolumeWithMetaData(
-            volume=[np.zeros((100, 100), dtype=np.uint16)],
-            num_slices=1
+            volume=[np.zeros((100, 100), dtype=np.uint16)]
         )
         study.oct_volume = oct_vol
         assert study.has_errors() is False

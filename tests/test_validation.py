@@ -57,8 +57,7 @@ class TestOctValidator:
     def test_validate_empty_volume(self):
         """Test validating empty volume."""
         oct_vol = OCTVolumeWithMetaData(
-            volume=[],
-            num_slices=0
+            volume=[]
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is False
@@ -70,8 +69,7 @@ class TestOctValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=[0.1, 0.1, 0.1],
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is True
@@ -83,8 +81,7 @@ class TestOctValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=None,
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         result = OctValidator.validate_oct_volume(oct_vol)
         assert result.is_valid is True  # Still valid
@@ -129,8 +126,7 @@ class TestStudyValidator:
             volume=[np.zeros((100, 100), dtype=np.uint16)],
             pixel_spacing=[0.1, 0.1, 0.1],
             patient_id="TEST",
-            laterality="L",
-            num_slices=1
+            laterality="L"
         )
         fundus = FundusImageWithMetaData(
             image=np.zeros((100, 100, 3), dtype=np.uint8),
@@ -146,3 +142,26 @@ class TestStudyValidator:
         result = OctValidator.validate_study(None, None)
         assert result.is_valid is False
         assert len(result.errors) > 0
+
+
+class TestPipelineValidationFlag:
+    """Test pipeline validate parameter behavior."""
+
+    def test_validate_true_raises_on_invalid_data(self, tmp_path):
+        """Test validate=True raises ValidationError on empty study data."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"\x00" * 100)
+        from oct_converter_app.pipeline import ProcessingPipeline, ValidationError
+        pipeline = ProcessingPipeline()
+        with pytest.raises(ValidationError):
+            pipeline.process(src_file, tmp_path / "out", validate=True)
+
+    def test_validate_false_bypasses_validation_error(self, tmp_path):
+        """Test validate=False bypasses safety validation check."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"\x00" * 100)
+        from oct_converter_app.pipeline import ProcessingPipeline
+        pipeline = ProcessingPipeline()
+        study = pipeline.process(src_file, tmp_path / "out", outputs=[], validate=False)
+        assert study is not None
+

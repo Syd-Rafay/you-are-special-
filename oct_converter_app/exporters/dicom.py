@@ -2,6 +2,12 @@
 
 This exporter delegates to the existing create_dicom_from_oct function
 to preserve validated DICOM generation logic.
+
+Performance Note:
+Unlike NpyExporter, ImageExporter, and MetadataExporter which operate
+from the in-memory OCTStudy object, DicomExporter is an exception to
+single-pass extraction. It re-parses the source file via create_dicom_from_oct()
+to apply validated format-specific DICOM metadata mappings.
 """
 
 from __future__ import annotations
@@ -23,7 +29,8 @@ class DicomExporter(BaseExporter):
     Note: The current implementation requires the original source file path
     because the underlying create_dicom_from_oct re-reads the file to extract
     data and apply format-specific DICOM metadata mappings. This preserves
-    the validated behavior but means the study object alone is insufficient.
+    the validated DICOM output but means DicomExporter incurs a second file
+    parse rather than operating exclusively from the in-memory OCTStudy object.
 
     Attributes:
         name: Exporter name ('dicom').

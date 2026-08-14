@@ -7,28 +7,39 @@ from __future__ import annotations
 
 import json
 import numpy as np
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from oct_converter_app.exporters.base import BaseExporter, ExportError
+from oct_converter_app.exporters.base import BaseExporter, ExportError, sanitize_path_component
 from oct_converter_app.models import OCTStudy
 
 
 class NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles NumPy types."""
+    """JSON encoder that handles NumPy types, bytes, datetimes, paths, and set/construct containers."""
 
     def default(self, obj: Any) -> Any:
         if isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
         if isinstance(obj, (np.floating, np.float64, np.float32)):
             return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
         if isinstance(obj, np.ndarray):
             return obj.tolist()
-        if isinstance(obj, (datetime,)):
+        if isinstance(obj, (datetime, date)):
             return obj.isoformat()
-        if isinstance(obj, (Path,)):
+        if isinstance(obj, Path):
             return str(obj)
+        if isinstance(obj, (bytes, bytearray)):
+            return obj.hex()
+        if isinstance(obj, set):
+            return list(obj)
+        try:
+            if hasattr(obj, "_io") or type(obj).__name__ in ("ListContainer", "Container"):
+                return list(obj) if hasattr(obj, "__iter__") else dict(obj)
+        except Exception:
+            pass
         return super().default(obj)
 
 
@@ -69,7 +80,8 @@ class MetadataExporter(BaseExporter):
             options: Optional configuration.
                      Keys: 'filename' to override default,
                            'indent' to override instance indent,
-                           'include_raw' to override instance include_raw.
+                           'include_raw' to override instance include_raw,
+                           'overwrite' (bool, default True) whether to overwrite existing files.
 
         Returns:
             List with single path to created JSON file.
@@ -82,13 +94,21 @@ class MetadataExporter(BaseExporter):
         # Get option overrides
         indent = options.get("indent", self.indent) if options else self.indent
         include_raw = options.get("include_raw", self.include_raw) if options else self.include_raw
+        overwrite = options.get("overwrite", True) if options else True
 
         filename = options.get("filename") if options else None
-        if not filename:
-            patient_id = study.patient_id or "unknown"
+        if filename:
+            filename = sanitize_path_component(filename, default="metadata.json")
+            if not filename.endswith(".json"):
+                filename = f"{filename}.json"
+        else:
+            patient_id = sanitize_path_component(study.patient_id, default="unknown")
             filename = f"{patient_id}_metadata.json"
 
         filepath = output_path / filename
+
+        if not overwrite and filepath.exists():
+            raise ExportError(f"File already exists and overwrite is disabled: {filepath}")
 
         try:
             metadata = self._build_metadata(study, include_raw)
@@ -98,6 +118,8 @@ class MetadataExporter(BaseExporter):
 
             return [filepath]
 
+        except ExportError:
+            raise
         except Exception as e:
             raise ExportError(f"Failed to export metadata to JSON: {e}") from e
 

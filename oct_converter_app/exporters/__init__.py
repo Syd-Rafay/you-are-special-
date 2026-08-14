@@ -9,7 +9,7 @@ Provides exporters for various output formats:
 
 from __future__ import annotations
 
-from .base import BaseExporter, ExportError
+from .base import BaseExporter, ExportError, sanitize_path_component
 from .dicom import DicomExporter
 from .images import ImageExporter
 from .metadata import MetadataExporter
@@ -18,8 +18,10 @@ from .npy import NpyExporter
 __all__ = [
     "BaseExporter",
     "ExportError",
+    "sanitize_path_component",
     "DicomExporter",
     "NpyExporter",
     "ImageExporter",
     "MetadataExporter",
 ]
+
