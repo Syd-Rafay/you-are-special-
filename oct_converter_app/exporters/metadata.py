@@ -249,6 +249,8 @@ class MetadataExporter(BaseExporter):
                 "has_fundus": study.capabilities.has_fundus,
                 "has_pixel_spacing": study.capabilities.has_pixel_spacing,
                 "has_contours": study.capabilities.has_contours,
+                "has_octa": study.capabilities.has_octa,
+                "has_layer_segmentation": study.capabilities.has_layer_segmentation,
             }
 
         return metadata
