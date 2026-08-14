@@ -5,6 +5,7 @@ Provides exporters for various output formats:
 - NumPy arrays (NPY)
 - Images (PNG, JPEG)
 - Metadata JSON
+- Zarr v3 stores
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from .dicom import DicomExporter
 from .images import ImageExporter
 from .metadata import MetadataExporter
 from .npy import NpyExporter
+from .zarr import ZarrExporter
 
 __all__ = [
     "BaseExporter",
@@ -23,5 +25,6 @@ __all__ = [
     "NpyExporter",
     "ImageExporter",
     "MetadataExporter",
+    "ZarrExporter",
 ]
 

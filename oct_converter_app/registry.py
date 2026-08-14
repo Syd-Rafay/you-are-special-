@@ -12,6 +12,7 @@ from oct_converter_app.exporters.dicom import DicomExporter
 from oct_converter_app.exporters.images import ImageExporter
 from oct_converter_app.exporters.metadata import MetadataExporter
 from oct_converter_app.exporters.npy import NpyExporter
+from oct_converter_app.exporters.zarr import ZarrExporter
 
 
 class ExporterNotFoundError(KeyError):
@@ -31,11 +32,12 @@ class ExportRegistry:
     """
 
     # Default registry with built-in exporters
-    _exporters: dict[str, Type[BaseExporter]] = {
+    _exporters: dict[str, type[BaseExporter]] = {
         "dicom": DicomExporter,
         "npy": NpyExporter,
         "images": ImageExporter,
         "metadata": MetadataExporter,
+        "zarr": ZarrExporter,
     }
 
     @classmethod

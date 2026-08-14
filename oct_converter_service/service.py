@@ -136,11 +136,16 @@ class ConversionService:
                 "npy": {".npy"},
                 "images": {".png", ".jpg", ".jpeg", ".tiff"},
                 "metadata": {".json"},
+                "zarr": {".zarr"},  # Zarr stores are directories with .zarr extension
             }
 
             for output_name in request.outputs:
                 valid_exts = format_extensions.get(output_name, set())
-                found = any(f.suffix.lower() in valid_exts for f in generated_files)
+                if output_name == "zarr":
+                    # Check for .zarr directory
+                    found = any(f.suffix == ".zarr" or f.name.endswith(".zarr") for f in generated_files)
+                else:
+                    found = any(f.suffix.lower() in valid_exts for f in generated_files)
                 if not found:
                     skipped_outputs.append(output_name)
 
