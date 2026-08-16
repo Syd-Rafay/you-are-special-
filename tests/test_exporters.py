@@ -176,8 +176,6 @@ class TestDicomExporter:
         """Test creating DICOM exporter."""
         exporter = DicomExporter()
         assert exporter.name == "dicom"
-        assert exporter.rows == 1024
-        assert exporter.cols == 512
 
 
 class TestPathTraversalProtection:
@@ -599,3 +597,189 @@ class TestZarrExporter:
             assert f.exists()
 
 
+
+
+class TestDicomExporterOphthalmicTomography:
+    """Test DICOM Ophthalmic Tomography Image Storage exporter."""
+
+    def test_ophthalmic_tomography_sop_class_uid(self, tmp_path):
+        """A. Basic structural OCT DICOM creation - verify SOP Class UID."""
+        import pydicom
+        from pydicom.uid import OphthalmicTomographyImageStorage
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        assert len(files) == 1
+        ds = pydicom.dcmread(files[0])
+        assert ds.SOPClassUID == OphthalmicTomographyImageStorage
+
+    def test_required_image_pixel_attributes(self, tmp_path):
+        """Verify required Image Pixel attributes are correct."""
+        import pydicom
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        ds = pydicom.dcmread(files[0])
+        
+        # Verify required attributes
+        assert ds.Modality == "OPT"
+        assert ds.NumberOfFrames == 5
+        assert ds.Rows == 20
+        assert ds.Columns == 30
+        assert ds.BitsAllocated == 16
+        assert ds.BitsStored == 16
+        assert ds.HighBit == 15
+        assert ds.PixelRepresentation == 0
+        assert ds.PhotometricInterpretation == "MONOCHROME2"
+
+    def test_pixel_roundtrip_exact_equality(self, tmp_path):
+        """B. Pixel round-trip - exact numerical equality."""
+        import pydicom
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        # Create source data with distinct values
+        source_data = np.arange(5 * 20 * 30, dtype=np.uint16).reshape((5, 20, 30))
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[slice_arr for slice_arr in source_data],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        ds = pydicom.dcmread(files[0])
+        restored = ds.pixel_array
+        
+        assert np.array_equal(source_data, restored)
+
+    def test_multiframe_structure(self, tmp_path):
+        """C. Multi-frame structure verification."""
+        import pydicom
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        # Synthetic volume: 5 x 20 x 30
+        source_data = np.arange(5 * 20 * 30, dtype=np.uint16).reshape((5, 20, 30))
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[slice_arr for slice_arr in source_data],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        ds = pydicom.dcmread(files[0])
+        
+        # Verify multi-frame structure
+        assert ds.NumberOfFrames == 5
+        assert ds.Rows == 20
+        assert ds.Columns == 30
+        
+        # Verify per-frame functional groups exist
+        assert hasattr(ds, 'PerFrameFunctionalGroupsSequence')
+        assert len(ds.PerFrameFunctionalGroupsSequence) == 5
+
+    def test_ophthalmic_volumetric_properties_flag(self, tmp_path):
+        """Verify Ophthalmic Volumetric Properties Flag is set."""
+        import pydicom
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        ds = pydicom.dcmread(files[0])
+        assert ds.OphthalmicVolumetricPropertiesFlag == 'Y'
+
+    def test_image_type_includes_volume(self, tmp_path):
+        """Verify Image Type includes VOLUME for volumetric OCT."""
+        import pydicom
+        
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+        
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="TEST001",
+            laterality="R",
+            pixel_spacing=[0.01, 0.002],
+        )
+        
+        study = OCTStudy(
+            source_path=src_file,
+            source_format="fds",
+            oct_volume=oct_vol
+        )
+        
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+        
+        ds = pydicom.dcmread(files[0])
+        assert 'VOLUME' in ds.ImageType

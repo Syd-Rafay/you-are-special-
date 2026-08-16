@@ -1,40 +1,17 @@
-
-# Python packaging
-*.egg-info/
-*.egg
-*.pyc
+```
+# Python cache files
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Dependencies
-.venv/
-venv/
-env/
-.env
-.env.local
-.env.*
-
-# Build artifacts
-build/
-dist/
-*.so
-*.dylib
-*.dll
-
-# Logs
-*.log
-
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-test_data/
+# Compiled Python files in specific directories
+oct_converter/__pycache__/
+oct_converter/dicom/__pycache__/
+oct_converter/exceptions/__pycache__/
+oct_converter/image_types/__pycache__/
+oct_converter/readers/__pycache__/
+oct_converter/readers/binary_structs/__pycache__/
+oct_converter_app/__pycache__/
+oct_converter_app/exporters/__pycache__/
+```

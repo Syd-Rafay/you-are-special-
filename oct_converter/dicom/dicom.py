@@ -199,9 +199,14 @@ def write_opt_dicom(
 ) -> Path:
     """Writes required DICOM metadata and oct pixel data to .dcm file.
 
+    This function creates a DICOM Ophthalmic Tomography Image Storage object
+    representing the structural OCT volume using the multi-frame representation.
+
+    Pixel data is preserved exactly without normalization, rescaling, or conversion.
+
     Args:
             meta: DICOM metadata information
-            frames: list of frames of pixel data
+            frames: list of frames of pixel data (B-scans)
             filepath: Path to where output file is being saved
     Returns:
             Path to created DICOM file
@@ -216,7 +221,9 @@ def write_opt_dicom(
     # TODO: Frame of reference if fundus image present
 
     # OPT Image Module PS3.3 C.8.17.7
-    ds.ImageType = ["DERIVED", "SECONDARY"]
+    # Image Type for volumetric structural OCT: DERIVED or ORIGINAL, SECONDARY, VOLUME
+    # Use ORIGINAL if unprocessed, DERIVED if processed. Default to DERIVED for safety.
+    ds.ImageType = ["DERIVED", "SECONDARY", "VOLUME"]
     ds.SamplesPerPixel = 1
     if meta.series_info.acquisition_date:
         # Convert string to datetime object if it's a string
@@ -241,6 +248,11 @@ def write_opt_dicom(
     ds.SamplesPerPixel = 1
     ds.NumberOfFrames = len(frames)
 
+    # Ophthalmic Tomography Image Module PS3.3 C.8.17.7
+    # Ophthalmic Volumetric Properties Flag (0022,1622) - VR is CS, expects 'Y' or 'N'
+    # Indicates whether this is a volumetric acquisition
+    ds.OphthalmicVolumetricPropertiesFlag = 'Y'  # Yes, this is a volumetric acquisition
+
     # Multi-frame Functional Groups Module PS3.3 C.7.6.16
     dt = datetime.now()
     ds.ContentDate = dt.strftime("%Y%m%d")
@@ -249,29 +261,32 @@ def write_opt_dicom(
     ds.InstanceNumber = 1
 
     per_frame = []
-    pixel_data_bytes = list()
-    # Normalize
-    frames = normalize_volume(frames)
-    # Convert to a 3d volume
-    pixel_data = np.array(frames).astype(np.uint16)
+    # Preserve exact pixel data - do NOT normalize or rescale
+    # Convert frames to a 3D numpy array preserving original dtype
+    pixel_data = np.stack([np.asarray(f) for f in frames]).astype(np.uint16)
     ds.Rows = pixel_data.shape[1]
     ds.Columns = pixel_data.shape[2]
+    
+    # Determine slice spacing for frame positions
+    slice_thickness = meta.image_geometry.slice_thickness
+    
     for i in range(pixel_data.shape[0]):
         # Per Frame Functional Groups
         frame_fgs = Dataset()
         frame_fgs.PlanePositionSequence = [Dataset()]
-        ipp = [0, 0, DSfloat(i * meta.image_geometry.slice_thickness, auto_format=True)]
+        ipp = [0, 0, DSfloat(i * slice_thickness, auto_format=True)]
         frame_fgs.PlanePositionSequence[0].ImagePositionPatient = ipp
         frame_fgs.FrameContentSequence = [Dataset()]
         frame_fgs.FrameContentSequence[0].InStackPositionNumber = i + 1
         frame_fgs.FrameContentSequence[0].StackID = "1"
 
-        # Pixel data
-        frame_dat = pixel_data[i, :, :]
-        pixel_data_bytes.append(frame_dat.tobytes())
         per_frame.append(frame_fgs)
     ds.PerFrameFunctionalGroupsSequence = per_frame
+    
+    # Set pixel data directly from numpy array - preserves exact values
+    # Pydicom 3.x handles the byte conversion correctly
     ds.PixelData = pixel_data.tobytes()
+    
     ds.save_as(
         filepath, implicit_vr=False, little_endian=True, enforce_file_format=True
     )
