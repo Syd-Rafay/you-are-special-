@@ -22,7 +22,7 @@ def create_parser() -> argparse.ArgumentParser:
     """Create argument parser for the CLI."""
     parser = argparse.ArgumentParser(
         prog="oct-convert",
-        description="Convert proprietary OCT files to standard formats (DICOM, NPY, images, metadata).",
+        description="Convert proprietary OCT files to standard formats (DICOM, NPY, images, metadata, Zarr).",
         epilog=(
             "Examples:\n"
             "  oct-convert scan.fds output/ --dicom\n"
@@ -67,9 +67,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="Export metadata as JSON file",
     )
     output_group.add_argument(
+        "--zarr",
+        action="store_true",
+        help="Export as Zarr v3 store",
+    )
+    output_group.add_argument(
         "--all",
         action="store_true",
-        help="Export all formats (DICOM, NPY, images, metadata)",
+        help="Export all formats (DICOM, NPY, images, metadata, Zarr)",
     )
 
     # Options
@@ -145,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     # Validate output selection
     outputs = []
     if args.all:
-        outputs = ["dicom", "npy", "images", "metadata"]
+        outputs = ["dicom", "npy", "images", "metadata", "zarr"]
     else:
         if args.dicom:
             outputs.append("dicom")
@@ -155,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             outputs.append("images")
         if args.metadata:
             outputs.append("metadata")
+        if args.zarr:
+            outputs.append("zarr")
 
     # Default to metadata if no output specified
     if not outputs:

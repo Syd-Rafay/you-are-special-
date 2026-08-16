@@ -196,33 +196,65 @@ class ZarrExporter(BaseExporter):
                 else:
                     height, width = None, None
 
-                axes = [
-                    {"name": "z", "type": "space", "unit": "micrometer"},
-                    {"name": "y", "type": "space", "unit": "micrometer"},
-                    {"name": "x", "type": "space", "unit": "micrometer"},
-                ]
+                # Extract spacing for volume axes [z, y, x]
+                pixel_spacing = getattr(study.oct_volume, 'pixel_spacing', None)
+                spacing: dict[str, float] = {}
+
+                if pixel_spacing is not None:
+                    source_fmt = (study.source_format or "").lower()
+                    if isinstance(pixel_spacing, (list, tuple)):
+                        valid_vals = [
+                            v for v in pixel_spacing
+                            if v is not None and isinstance(v, (int, float)) and not np.isnan(v)
+                        ]
+                        if valid_vals:
+                            if source_fmt in ("fda", "fds") and len(pixel_spacing) >= 3:
+                                # FDA/FDS pixel_spacing convention:
+                                # [0]: width spacing (x / lateral)
+                                # [1]: slice thickness (z / b-scan spacing)
+                                # [2]: height spacing (y / axial)
+                                if pixel_spacing[1] is not None:
+                                    spacing["z"] = float(pixel_spacing[1])
+                                if pixel_spacing[2] is not None:
+                                    spacing["y"] = float(pixel_spacing[2])
+                                if pixel_spacing[0] is not None:
+                                    spacing["x"] = float(pixel_spacing[0])
+                            elif source_fmt == "e2e" and len(pixel_spacing) >= 3:
+                                # E2E pixel_spacing convention:
+                                # [0]: scalex (x / lateral)
+                                # [1]: scaley (y / axial)
+                                # [2]: slice_thickness (z / b-scan spacing)
+                                if pixel_spacing[2] is not None:
+                                    spacing["z"] = float(pixel_spacing[2])
+                                if pixel_spacing[1] is not None:
+                                    spacing["y"] = float(pixel_spacing[1])
+                                if pixel_spacing[0] is not None:
+                                    spacing["x"] = float(pixel_spacing[0])
+                            else:
+                                # Fallback convention for list/tuple pixel_spacing:
+                                # [0] -> x, [1] -> y, [2] -> z
+                                if len(pixel_spacing) >= 1 and pixel_spacing[0] is not None:
+                                    spacing["x"] = float(pixel_spacing[0])
+                                if len(pixel_spacing) >= 2 and pixel_spacing[1] is not None:
+                                    spacing["y"] = float(pixel_spacing[1])
+                                if len(pixel_spacing) >= 3 and pixel_spacing[2] is not None:
+                                    spacing["z"] = float(pixel_spacing[2])
+                    elif isinstance(pixel_spacing, (int, float)) and not np.isnan(pixel_spacing):
+                        val = float(pixel_spacing)
+                        spacing = {"z": val, "y": val, "x": val}
+
+                # Construct axes metadata
+                axes = []
+                for axis_name in ["z", "y", "x"]:
+                    axis_meta = {"name": axis_name, "type": "space"}
+                    if axis_name in spacing:
+                        axis_meta["unit"] = "millimeter"
+                    axes.append(axis_meta)
+
                 attributes["axes"] = axes
 
-                # Physical spacing from OCT volume if available
-                pixel_spacing = getattr(study.oct_volume, 'pixel_spacing', None)
-                if pixel_spacing is not None:
-                    # pixel_spacing typically contains (axial, lateral) or similar
-                    # Map to z, y, x spacing conservatively
-                    spacing = {}
-                    if isinstance(pixel_spacing, (list, tuple)) and len(pixel_spacing) >= 2:
-                        # Assume (lateral_y, lateral_x) or similar
-                        spacing["y"] = float(pixel_spacing[0])
-                        spacing["x"] = float(pixel_spacing[1])
-                        if len(pixel_spacing) >= 3:
-                            spacing["z"] = float(pixel_spacing[2])
-                    elif isinstance(pixel_spacing, (int, float)):
-                        # Uniform spacing
-                        spacing["x"] = float(pixel_spacing)
-                        spacing["y"] = float(pixel_spacing)
-                        spacing["z"] = float(pixel_spacing)
-
-                    if spacing:
-                        attributes["scale"] = spacing
+                if spacing:
+                    attributes["scale"] = spacing
 
         # Source format
         attributes["source_format"] = study.source_format

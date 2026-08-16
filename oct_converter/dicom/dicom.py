@@ -27,7 +27,10 @@ from oct_converter.exceptions import InvalidOCTReaderError
 from oct_converter.readers import BOCT, E2E, FDA, FDS, IMG, POCT
 
 # Deterministic implementation UID based on package name and version
-version = metadata.version("oct_converter")
+try:
+    version = metadata.version("oct_converter") or "0.1.0"
+except Exception:
+    version = "0.1.0"
 implementation_uid = generate_uid(entropy_srcs=["oct_converter", version])
 
 

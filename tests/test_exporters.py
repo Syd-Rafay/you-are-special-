@@ -7,7 +7,7 @@ import pytest
 from pathlib import Path
 
 from oct_converter_app.exporters import (
-    DicomExporter, NpyExporter, ImageExporter, MetadataExporter, sanitize_path_component
+    DicomExporter, NpyExporter, ImageExporter, MetadataExporter, ZarrExporter, sanitize_path_component
 )
 from oct_converter_app.exporters.base import ExportError
 from oct_converter_app.exporters.metadata import NumpyEncoder
@@ -380,4 +380,222 @@ class TestMetadataEncoderRobustness:
         assert decoded["path"] == "/tmp/test.fds"
         assert sorted(decoded["nested"]["tags"]) == [1, 2, 3]
         assert decoded["nested"]["raw_bytes"] == "7261775f64617461"
+
+
+class TestZarrExporter:
+    """Test Zarr v3 exporter implementation."""
+
+    def test_numerical_roundtrip(self, tmp_path):
+        """A. Basic numerical round-trip (shape, dtype, exact pixel equality)."""
+        import zarr
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        source_data = np.arange(10 * 20 * 30, dtype=np.uint16).reshape((10, 20, 30))
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[slice_arr for slice_arr in source_data],
+            patient_id="PAT001",
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        assert len(out_files) == 1
+        zarr_path = out_files[0]
+        assert zarr_path.exists()
+        assert zarr_path.suffix == ".zarr"
+
+        root = zarr.open_group(store=str(zarr_path), mode="r")
+        assert "volume" in root
+        volume_arr = root["volume"]
+
+        assert volume_arr.shape == source_data.shape
+        assert volume_arr.dtype == source_data.dtype
+        restored = np.asarray(volume_arr)
+        assert np.array_equal(source_data, restored)
+
+    def test_non_default_dimensions_and_chunking(self, tmp_path):
+        """B & C. Non-default dimensions (7 x 201 x 199) and chunking (1, height, width)."""
+        import zarr
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        shape = (7, 201, 199)
+        source_data = np.random.randint(0, 65535, size=shape, dtype=np.uint16)
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[slice_arr for slice_arr in source_data],
+            patient_id="PAT002",
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        zarr_path = out_files[0]
+
+        root = zarr.open_group(store=str(zarr_path), mode="r")
+        volume_arr = root["volume"]
+        assert volume_arr.shape == (7, 201, 199)
+        assert volume_arr.chunks == (1, 201, 199)
+
+    def test_fda_fds_spacing_mapping(self, tmp_path):
+        """D. FDA/FDS spacing mapping: [width, slice_thickness, height] -> z, y, x scale."""
+        import zarr
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        # Distinct spacing values: width=0.01 (x), slice_thickness=0.05 (z), height=0.002 (y)
+        pixel_spacing = [0.01, 0.05, 0.002]
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.ones((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="PAT_FDS",
+            pixel_spacing=pixel_spacing,
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        root = zarr.open_group(store=str(out_files[0]), mode="r")
+
+        attrs = dict(root.attrs)
+        assert "scale" in attrs
+        scale = attrs["scale"]
+        assert scale["z"] == 0.05
+        assert scale["y"] == 0.002
+        assert scale["x"] == 0.01
+
+        axes = attrs["axes"]
+        assert axes == [
+            {"name": "z", "type": "space", "unit": "millimeter"},
+            {"name": "y", "type": "space", "unit": "millimeter"},
+            {"name": "x", "type": "space", "unit": "millimeter"},
+        ]
+
+    def test_e2e_spacing_mapping(self, tmp_path):
+        """E. E2E spacing mapping: [scalex, scaley, slice_thickness] -> z, y, x scale."""
+        import zarr
+        src_file = tmp_path / "test.e2e"
+        src_file.write_bytes(b"fake e2e")
+
+        # Distinct spacing values: scalex=0.01 (x), scaley=0.002 (y), slice_thickness=0.05 (z)
+        pixel_spacing = [0.01, 0.002, 0.05]
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.ones((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="PAT_E2E",
+            pixel_spacing=pixel_spacing,
+        )
+        study = OCTStudy(source_path=src_file, source_format="e2e", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        root = zarr.open_group(store=str(out_files[0]), mode="r")
+
+        attrs = dict(root.attrs)
+        scale = attrs["scale"]
+        assert scale["z"] == 0.05
+        assert scale["y"] == 0.002
+        assert scale["x"] == 0.01
+
+    def test_poct_spacing_mapping(self, tmp_path):
+        """F. POCT spacing mapping: [scale_x, scale_y] -> y, x scale without z."""
+        import zarr
+        src_file = tmp_path / "test.OCT"
+        src_file.write_bytes(b"fake poct")
+
+        pixel_spacing = [0.015, 0.025]
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.ones((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="PAT_POCT",
+            pixel_spacing=pixel_spacing,
+        )
+        study = OCTStudy(source_path=src_file, source_format="poct", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        root = zarr.open_group(store=str(out_files[0]), mode="r")
+
+        attrs = dict(root.attrs)
+        scale = attrs["scale"]
+        assert "z" not in scale
+        assert scale["y"] == 0.025
+        assert scale["x"] == 0.015
+
+        axes = attrs["axes"]
+        assert axes == [
+            {"name": "z", "type": "space"},
+            {"name": "y", "type": "space", "unit": "millimeter"},
+            {"name": "x", "type": "space", "unit": "millimeter"},
+        ]
+
+    def test_missing_spacing(self, tmp_path):
+        """G. Missing spacing: no scale attribute, no physical units."""
+        import zarr
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.ones((20, 30), dtype=np.uint16) for _ in range(5)],
+            patient_id="PAT_NOSPACING",
+            pixel_spacing=None,
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        out_files = exporter.export(study, tmp_path / "out")
+        root = zarr.open_group(store=str(out_files[0]), mode="r")
+
+        attrs = dict(root.attrs)
+        assert "scale" not in attrs
+        axes = attrs["axes"]
+        for axis in axes:
+            assert "unit" not in axis
+
+    def test_overwrite_behavior(self, tmp_path):
+        """H. Overwrite behavior: overwrite=False raises ExportError, overwrite=True succeeds."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((10, 10), dtype=np.uint16)],
+            patient_id="PAT_OVERWRITE",
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+        exporter = ZarrExporter()
+
+        out_dir = tmp_path / "out_overwrite"
+        files1 = exporter.export(study, out_dir, options={"overwrite": True})
+        assert len(files1) == 1
+
+        with pytest.raises(ExportError, match="overwrite is disabled"):
+            exporter.export(study, out_dir, options={"overwrite": False})
+
+        files2 = exporter.export(study, out_dir, options={"overwrite": True})
+        assert len(files2) == 1
+
+    @pytest.mark.parametrize(
+        "malicious_id",
+        [
+            "../../evil",
+            "/absolute/path",
+            r"..\..\evil",
+        ],
+    )
+    def test_path_safety(self, tmp_path, malicious_id):
+        """I. Path safety with adversarial patient IDs."""
+        output_dir = tmp_path / "zarr_out"
+        output_dir_resolved = output_dir.resolve()
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"fake fds")
+
+        oct_vol = OCTVolumeWithMetaData(
+            volume=[np.zeros((10, 10), dtype=np.uint16)],
+            patient_id=malicious_id,
+        )
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = ZarrExporter()
+        files = exporter.export(study, output_dir)
+        for f in files:
+            assert f.resolve().is_relative_to(output_dir_resolved)
+            assert f.exists()
+
 

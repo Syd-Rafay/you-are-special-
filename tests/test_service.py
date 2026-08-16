@@ -205,6 +205,26 @@ class TestConversionServiceE2E:
         for f in result.generated_files:
             assert f.exists()
 
+    def test_zarr_service_integration(self, fake_fds_file, tmp_path, mock_pipeline_reader):
+        """TEST J: Service integration for Zarr exporter."""
+        output_dir = tmp_path / "zarr_service_out"
+        service = ConversionService()
+        request = ConversionRequest(
+            input_path=fake_fds_file,
+            output_dir=output_dir,
+            outputs=["zarr"],
+        )
+
+        result = service.convert(request)
+
+        assert result.success is True
+        assert len(result.generated_files) == 1
+        zarr_store = result.generated_files[0]
+        assert zarr_store.exists()
+        assert zarr_store.name.endswith(".zarr")
+        assert zarr_store.resolve().is_relative_to(output_dir.resolve())
+        assert result.requested_outputs == ["zarr"]
+
     def test_b_overwrite_through_service(self, fake_fds_file, tmp_path, mock_pipeline_reader):
         """TEST B: Service respects overwrite flag across requests."""
         output_dir = tmp_path / "out_overwrite"
