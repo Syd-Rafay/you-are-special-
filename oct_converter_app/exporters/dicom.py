@@ -1,36 +1,19 @@
-"""DICOM exporter wrapping existing oct_converter DICOM functionality.
+"""DICOM exporter for OCT studies into Ophthalmic Tomography Image Storage objects.
 
-This exporter delegates to the existing create_dicom_from_oct function
-to preserve validated DICOM generation logic.
-
-Performance Note:
-Unlike NpyExporter, ImageExporter, and MetadataExporter which operate
-from the in-memory OCTStudy object, DicomExporter is an exception to
-single-pass extraction. It re-parses the source file via create_dicom_from_oct()
-to apply validated format-specific DICOM metadata mappings.
+Operates directly on the in-memory OCTStudy object without re-parsing source files.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from oct_converter.dicom import create_dicom_from_oct
-
-from oct_converter_app.exporters.base import BaseExporter, ExportError
+from oct_converter.dicom import write_ophthalmic_tomography_dicom_from_study
+from oct_converter_app.exporters.base import BaseExporter, ExportError, sanitize_path_component
 from oct_converter_app.models import OCTStudy
 
 
 class DicomExporter(BaseExporter):
-    """Exporter for DICOM format.
-
-    This exporter wraps the existing create_dicom_from_oct function from
-    oct_converter.dicom to preserve all validated DICOM generation logic.
-
-    Note: The current implementation requires the original source file path
-    because the underlying create_dicom_from_oct re-reads the file to extract
-    data and apply format-specific DICOM metadata mappings. This preserves
-    the validated DICOM output but means DicomExporter incurs a second file
-    parse rather than operating exclusively from the in-memory OCTStudy object.
+    """Exporter for DICOM format (Ophthalmic Tomography Image Storage IOD).
 
     Attributes:
         name: Exporter name ('dicom').
@@ -72,16 +55,12 @@ class DicomExporter(BaseExporter):
     ) -> list[Path]:
         """Export study to DICOM format.
 
-        This method calls the existing create_dicom_from_oct function which
-        re-reads the source file. The study object is used for validation
-        but the actual DICOM generation uses the original file.
+        Operates directly from the in-memory OCTStudy object.
 
         Args:
-            study: The OCTStudy (used for validation, not data extraction).
+            study: The OCTStudy containing extracted volume data.
             output_dir: Directory to write DICOM files.
-            options: Optional overrides for conversion parameters.
-                     Keys: 'rows', 'cols', 'interlaced', 'diskbuffered',
-                           'extract_scan_repeats', 'scalex', 'slice_thickness'
+            options: Optional configuration.
 
         Returns:
             List of paths to created DICOM files.
@@ -90,53 +69,46 @@ class DicomExporter(BaseExporter):
             ExportError: If DICOM conversion fails.
         """
         output_path = self._ensure_output_dir(output_dir)
-
-        # Apply any option overrides (pop overwrite so it isn't passed to create_dicom_from_oct)
         options_copy = dict(options) if options else {}
         overwrite = options_copy.pop("overwrite", True)
 
-        if not overwrite:
-            stem = study.source_path.stem
-            existing_dicoms = list(output_path.glob(f"{stem}*.dcm"))
-            if existing_dicoms:
-                raise ExportError(
-                    f"File already exists and overwrite is disabled: {existing_dicoms[0]}"
-                )
+        if not self.supports_oct(study):
+            raise ExportError("No OCT volume data available to export to DICOM")
 
-        kwargs = {
-            "rows": self.rows,
-            "cols": self.cols,
-            "interlaced": self.interlaced,
-            "diskbuffered": self.diskbuffered,
-            "extract_scan_repeats": self.extract_scan_repeats,
-            "scalex": self.scalex,
-            "slice_thickness": self.slice_thickness,
-        }
-        kwargs.update(options_copy)
+        filename_stem = options_copy.get("oct_filename")
+        if filename_stem:
+            filename_stem = sanitize_path_component(filename_stem, default="oct")
+            if filename_stem.endswith(".dcm"):
+                filename_stem = filename_stem[:-4]
+        else:
+            patient_id = sanitize_path_component(study.patient_id, default="unknown")
+            filename_stem = f"{patient_id}_oct"
+
+        output_file = output_path / f"{filename_stem}.dcm"
+
+        if not overwrite and output_file.exists():
+            raise ExportError(
+                f"File already exists and overwrite is disabled: {output_file}"
+            )
 
         try:
-            # Delegate to existing validated DICOM conversion
-            # This re-reads the source file but preserves correct behavior
-            dicom_paths = create_dicom_from_oct(
-                input_file=str(study.source_path),
-                output_dir=str(output_path),
-                **kwargs,
-            )
-            return [Path(p) for p in dicom_paths]
+            created_file = write_ophthalmic_tomography_dicom_from_study(study, output_file)
+            return [created_file]
         except Exception as e:
-            raise ExportError(
-                f"DICOM export failed for {study.source_path}: {e}"
-            ) from e
+            raise ExportError(f"DICOM export failed: {e}") from e
 
     def supports_oct(self, study: OCTStudy) -> bool:
         """Check if DICOM export is possible for this study.
-
-        DICOM export requires the source file to exist (since it re-reads).
 
         Args:
             study: The study to check.
 
         Returns:
-            True if source file exists.
+            True if valid OCT volume data is present.
         """
-        return study.source_path.exists()
+        return (
+            study.oct_volume is not None
+            and study.oct_volume.volume is not None
+            and len(study.oct_volume.volume) > 0
+        )
+

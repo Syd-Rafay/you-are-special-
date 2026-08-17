@@ -179,6 +179,34 @@ class TestDicomExporter:
         assert exporter.rows == 1024
         assert exporter.cols == 512
 
+    def test_dicom_exporter_supports_oct(self, tmp_path):
+        """Test supports_oct checks in-memory OCT volume data."""
+        exporter = DicomExporter()
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"dummy")
+
+        study_no_vol = OCTStudy(source_path=src_file, source_format="fds", oct_volume=None)
+        assert exporter.supports_oct(study_no_vol) is False
+
+        oct_vol = OCTVolumeWithMetaData(volume=[np.zeros((10, 10), dtype=np.uint16)], patient_id="PAT1")
+        study_with_vol = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+        assert exporter.supports_oct(study_with_vol) is True
+
+    def test_export_canonical_study(self, tmp_path):
+        """Test exporting canonical study directly."""
+        src_file = tmp_path / "test.fds"
+        src_file.write_bytes(b"dummy")
+
+        oct_vol = OCTVolumeWithMetaData(volume=[np.zeros((10, 10), dtype=np.uint16)], patient_id="PAT1")
+        study = OCTStudy(source_path=src_file, source_format="fds", oct_volume=oct_vol)
+
+        exporter = DicomExporter()
+        files = exporter.export(study, tmp_path / "output")
+
+        assert len(files) == 1
+        assert files[0].exists()
+        assert files[0].suffix == ".dcm"
+
 
 class TestPathTraversalProtection:
     """Regression tests for path traversal vulnerability prevention."""

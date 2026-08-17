@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from construct import StreamError, StringError
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
+from pydicom.tag import Tag
 from pydicom.uid import (
     ExplicitVRLittleEndian,
     OphthalmicPhotography16BitImageStorage,
@@ -16,6 +17,7 @@ from pydicom.uid import (
 )
 from pydicom.valuerep import DSfloat
 
+from oct_converter_app.models import OCTStudy, VendorDevice
 from oct_converter.dicom.boct_meta import boct_dicom_metadata
 from oct_converter.dicom.e2e_meta import e2e_dicom_metadata
 from oct_converter.dicom.fda_meta import fda_dicom_metadata
@@ -194,6 +196,297 @@ def opt_shared_functional_groups(ds: Dataset, meta: DicomMetadata) -> Dataset:
     return ds
 
 
+def write_ophthalmic_tomography_dicom_from_study(
+    study: OCTStudy, filepath: Path | str
+) -> Path:
+    """Writes an OCTStudy to an Ophthalmic Tomography Image Storage DICOM file.
+
+    Args:
+        study: The OCTStudy object containing OCT volume and metadata.
+        filepath: Path to save the output DICOM file.
+
+    Returns:
+        Path to created DICOM file.
+    """
+    if (
+        study.oct_volume is None
+        or study.oct_volume.volume is None
+        or len(study.oct_volume.volume) == 0
+    ):
+        raise ValueError("OCTStudy does not contain valid OCT volume data.")
+
+    volume = study.oct_volume.volume
+
+    # Float rejection: check if pixel data is floating point
+    if isinstance(volume, np.ndarray):
+        if np.issubdtype(volume.dtype, np.floating):
+            raise ValueError("Float pixel data is not supported for integer OCT DICOM export.")
+        volume_arr = volume
+    elif isinstance(volume, list) and len(volume) > 0:
+        for frame in volume:
+            if hasattr(frame, "dtype") and np.issubdtype(frame.dtype, np.floating):
+                raise ValueError("Float pixel data is not supported for integer OCT DICOM export.")
+        volume_arr = np.array(volume)
+        if np.issubdtype(volume_arr.dtype, np.floating):
+            raise ValueError("Float pixel data is not supported for integer OCT DICOM export.")
+    else:
+        raise ValueError("Invalid OCT volume data format.")
+
+    if volume_arr.ndim != 3:
+        raise ValueError(f"OCT volume must be 3D [z, y, x], got shape {volume_arr.shape}")
+
+    # Preserve exact numeric values, cast to uint16
+    pixel_data = volume_arr.astype(np.uint16)
+    num_frames, rows, cols = pixel_data.shape
+
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # File Meta Dataset
+    sop_instance_uid = generate_uid()
+    file_meta = FileMetaDataset()
+    file_meta.MediaStorageSOPClassUID = OphthalmicTomographyImageStorage
+    file_meta.MediaStorageSOPInstanceUID = sop_instance_uid
+    file_meta.ImplementationClassUID = implementation_uid
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+
+    ds = FileDataset(str(filepath), {}, file_meta=file_meta, preamble=b"\0" * 128)
+
+    # Patient Module PS3.3 C.7.1.1
+    patient_id = study.patient_id or "UNKNOWN"
+    ds.PatientID = str(patient_id)
+    if (
+        study.oct_volume.first_name
+        or study.oct_volume.surname
+    ):
+        first = study.oct_volume.first_name or ""
+        last = study.oct_volume.surname or ""
+        ds.PatientName = f"{last}^{first}"
+    else:
+        ds.PatientName = str(patient_id)
+
+    ds.PatientSex = str(study.oct_volume.sex) if study.oct_volume.sex else ""
+    if study.oct_volume.DOB:
+        if isinstance(study.oct_volume.DOB, (datetime, datetime.date if hasattr(datetime, "date") else object)):
+            ds.PatientBirthDate = study.oct_volume.DOB.strftime("%Y%m%d")
+        else:
+            ds.PatientBirthDate = str(study.oct_volume.DOB).replace("-", "")
+    else:
+        ds.PatientBirthDate = ""
+
+    # General Study Module PS3.3 C.7.2.1
+    ds.StudyInstanceUID = generate_uid()
+    ds.StudyID = str(study.oct_volume.volume_id or "1")
+    acq_date = study.acquisition_date
+    if acq_date:
+        if isinstance(acq_date, str):
+            try:
+                acq_date = datetime.fromisoformat(acq_date)
+            except Exception:
+                acq_date = None
+
+    if acq_date and isinstance(acq_date, datetime):
+        ds.StudyDate = acq_date.strftime("%Y%m%d")
+        ds.StudyTime = acq_date.strftime("%H%M%S.%f")
+    else:
+        ds.StudyDate = ""
+        ds.StudyTime = ""
+
+    # General & Ophthalmic Tomography Series Module PS3.3 C.7.3.1, C.8.17.6
+    ds.Modality = "OPT"
+    ds.SeriesInstanceUID = generate_uid()
+    ds.SeriesNumber = 1
+    ds.SeriesDescription = "OCT Volume"
+    laterality_raw = study.laterality or ""
+    lat_map = {
+        "OD": "R",
+        "RIGHT": "R",
+        "R": "R",
+        "OS": "L",
+        "LEFT": "L",
+        "L": "L",
+        "OU": "B",
+        "BOTH": "B",
+        "B": "B",
+        "M": "M",
+    }
+    dicom_laterality = lat_map.get(str(laterality_raw).upper(), "")
+    ds.Laterality = dicom_laterality
+
+    # Equipment / Enhanced General Equipment Module PS3.3 C.7.5.1, C.7.5.2
+    if study.vendor_device:
+        ds.Manufacturer = study.vendor_device.manufacturer or "UNKNOWN"
+        ds.ManufacturerModelName = study.vendor_device.model or ""
+        ds.SoftwareVersions = study.vendor_device.software_version or ""
+    else:
+        ds.Manufacturer = "UNKNOWN"
+        ds.ManufacturerModelName = ""
+        ds.SoftwareVersions = ""
+
+    ds.AcquisitionDeviceTypeCodeSequence = [Dataset()]
+    ds.AcquisitionDeviceTypeCodeSequence[0].CodeValue = "110001"
+    ds.AcquisitionDeviceTypeCodeSequence[0].CodingSchemeDesignator = "DCM"
+    ds.AcquisitionDeviceTypeCodeSequence[0].CodeMeaning = (
+        "Optical Coherence Tomography Scanner"
+    )
+    ds.DetectorType = "CCD"
+
+    # Ocular Region Imaged Module PS3.3 C.8.17.5
+    ds.ImageLaterality = dicom_laterality
+    ds.AnatomicRegionSequence = [Dataset()]
+    ds.AnatomicRegionSequence[0].CodeValue = "T-AA000"
+    ds.AnatomicRegionSequence[0].CodingSchemeDesignator = "SRT"
+    ds.AnatomicRegionSequence[0].CodeMeaning = "Eye"
+
+    # Ophthalmic Tomography Image Module PS3.3 C.8.17.7
+    ds.SOPClassUID = OphthalmicTomographyImageStorage
+    ds.SOPInstanceUID = sop_instance_uid
+    ds.ImageType = ["ORIGINAL", "PRIMARY", "GEOMETRY", "NONE"]
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.BitsAllocated = 16
+    ds.BitsStored = 16
+    ds.HighBit = 15
+    ds.PixelRepresentation = 0
+    ds.Rows = rows
+    ds.Columns = cols
+    ds.NumberOfFrames = num_frames
+    ds.OphthalmicVolumetricPropertiesFlag = "VOLUME"
+    ds.AcquisitionNumber = 1
+    ds.InstanceNumber = 1
+
+    if acq_date and isinstance(acq_date, datetime):
+        ds.AcquisitionDateTime = acq_date.strftime("%Y%m%d%H%M%S.%f")
+    else:
+        ds.AcquisitionDateTime = ""
+
+    dt = datetime.now()
+    ds.ContentDate = dt.strftime("%Y%m%d")
+    ds.ContentTime = dt.strftime("%H%M%S.%f")
+
+    # Multi-frame Dimension Module PS3.3 C.7.6.17
+    dim_org_uid = generate_uid()
+    dim_org = Dataset()
+    dim_org.DimensionOrganizationUID = dim_org_uid
+    ds.DimensionOrganizationSequence = [dim_org]
+
+    dim_index = Dataset()
+    dim_index.DimensionIndexPointer = Tag(0x0020, 0x9057)  # In-Stack Position Number
+    dim_index.FunctionalGroupPointer = Tag(0x0020, 0x9111)  # Frame Content Sequence
+    dim_index.DimensionOrganizationUID = dim_org_uid
+    dim_index.DimensionDescriptionLabel = "B-scan Frame Number"
+    ds.DimensionIndexSequence = [dim_index]
+
+    # Multi-frame Functional Groups Module PS3.3 C.7.6.16
+    # Shared Functional Groups
+    shared_fg = Dataset()
+
+    # Frame Anatomy
+    frame_anatomy = Dataset()
+    frame_anatomy.FrameLaterality = dicom_laterality
+    frame_anatomy.AnatomicRegionSequence = [ds.AnatomicRegionSequence[0].copy()]
+    shared_fg.FrameAnatomySequence = [frame_anatomy]
+
+    # Physical Spacing Mapping (Pixel Measures)
+    pixel_spacing = getattr(study.oct_volume, "pixel_spacing", None)
+    if pixel_spacing is not None:
+        source_fmt = (study.source_format or "").lower()
+        col_spacing = None
+        row_spacing = None
+        slice_thickness = None
+
+        if isinstance(pixel_spacing, (list, tuple)):
+            valid_vals = [
+                v
+                for v in pixel_spacing
+                if v is not None and isinstance(v, (int, float)) and not np.isnan(v)
+            ]
+            if valid_vals:
+                if source_fmt in ("fda", "fds") and len(pixel_spacing) >= 3:
+                    # FDA/FDS pixel_spacing convention: [x (col), z (slice_thickness), y (row)]
+                    if pixel_spacing[0] is not None and not np.isnan(pixel_spacing[0]):
+                        col_spacing = float(pixel_spacing[0])
+                    if pixel_spacing[1] is not None and not np.isnan(pixel_spacing[1]):
+                        slice_thickness = float(pixel_spacing[1])
+                    if pixel_spacing[2] is not None and not np.isnan(pixel_spacing[2]):
+                        row_spacing = float(pixel_spacing[2])
+                elif source_fmt == "e2e" and len(pixel_spacing) >= 3:
+                    # E2E pixel_spacing convention: [x (col), y (row), z (slice_thickness)]
+                    if pixel_spacing[0] is not None and not np.isnan(pixel_spacing[0]):
+                        col_spacing = float(pixel_spacing[0])
+                    if pixel_spacing[1] is not None and not np.isnan(pixel_spacing[1]):
+                        row_spacing = float(pixel_spacing[1])
+                    if pixel_spacing[2] is not None and not np.isnan(pixel_spacing[2]):
+                        slice_thickness = float(pixel_spacing[2])
+                else:
+                    # Fallback convention: [x (col), y (row), z (slice_thickness)]
+                    if (
+                        len(pixel_spacing) >= 1
+                        and pixel_spacing[0] is not None
+                        and not np.isnan(pixel_spacing[0])
+                    ):
+                        col_spacing = float(pixel_spacing[0])
+                    if (
+                        len(pixel_spacing) >= 2
+                        and pixel_spacing[1] is not None
+                        and not np.isnan(pixel_spacing[1])
+                    ):
+                        row_spacing = float(pixel_spacing[1])
+                    if (
+                        len(pixel_spacing) >= 3
+                        and pixel_spacing[2] is not None
+                        and not np.isnan(pixel_spacing[2])
+                    ):
+                        slice_thickness = float(pixel_spacing[2])
+        elif isinstance(pixel_spacing, (int, float)) and not np.isnan(pixel_spacing):
+            val = float(pixel_spacing)
+            col_spacing = val
+            row_spacing = val
+            slice_thickness = val
+
+        has_pixel_spacing_values = (
+            row_spacing is not None
+            and row_spacing > 0
+            and col_spacing is not None
+            and col_spacing > 0
+        )
+        has_slice_thickness_value = slice_thickness is not None and slice_thickness > 0
+
+        if has_pixel_spacing_values or has_slice_thickness_value:
+            pixel_measures = Dataset()
+            if has_pixel_spacing_values:
+                pixel_measures.PixelSpacing = [
+                    DSfloat(row_spacing, auto_format=True),
+                    DSfloat(col_spacing, auto_format=True),
+                ]
+            if has_slice_thickness_value:
+                pixel_measures.SliceThickness = DSfloat(slice_thickness, auto_format=True)
+            shared_fg.PixelMeasuresSequence = [pixel_measures]
+
+    ds.SharedFunctionalGroupsSequence = [shared_fg]
+
+    # Per-Frame Functional Groups
+    per_frame_list = []
+    for i in range(num_frames):
+        frame_fgs = Dataset()
+        frame_content = Dataset()
+        frame_content.InStackPositionNumber = i + 1
+        frame_content.StackID = "1"
+        frame_content.DimensionIndexValues = [i + 1]
+        frame_fgs.FrameContentSequence = [frame_content]
+        per_frame_list.append(frame_fgs)
+
+    ds.PerFrameFunctionalGroupsSequence = per_frame_list
+
+    # Pixel Data
+    ds.PixelData = pixel_data.tobytes()
+
+    ds.save_as(
+        filepath, implicit_vr=False, little_endian=True, enforce_file_format=True
+    )
+    return filepath
+
+
 def write_opt_dicom(
     meta: DicomMetadata, frames: t.List[np.ndarray], filepath: Path
 ) -> Path:
@@ -206,76 +499,31 @@ def write_opt_dicom(
     Returns:
             Path to created DICOM file
     """
-    ds = opt_base_dicom(filepath)
-    ds = populate_patient_info(ds, meta)
-    ds = populate_manufacturer_info(ds, meta)
-    ds = populate_opt_series(ds, meta)
-    ds = populate_ocular_region(ds, meta)
-    ds = opt_shared_functional_groups(ds, meta)
-
-    # TODO: Frame of reference if fundus image present
-
-    # OPT Image Module PS3.3 C.8.17.7
-    ds.ImageType = ["DERIVED", "SECONDARY"]
-    ds.SamplesPerPixel = 1
-    if meta.series_info.acquisition_date:
-        # Convert string to datetime object if it's a string
-        if isinstance(meta.series_info.acquisition_date, str):
-            input_datetime = datetime.strptime(
-                meta.series_info.acquisition_date, "%Y-%m-%d %H:%M:%S"
-            )
-        else:
-            input_datetime = meta.series_info.acquisition_date
-        ds.AcquisitionDateTime = input_datetime.strftime("%Y%m%d%H%M%S.%f")
-    else:
-        ds.AcquisitionDateTime = ""
-
-    ds.AcquisitionNumber = 1
-    ds.PhotometricInterpretation = "MONOCHROME2"
-    # Unsigned integer
-    ds.PixelRepresentation = 0
-    # Use 16 bit pixel
-    ds.BitsAllocated = 16
-    ds.BitsStored = ds.BitsAllocated
-    ds.HighBit = ds.BitsAllocated - 1
-    ds.SamplesPerPixel = 1
-    ds.NumberOfFrames = len(frames)
-
-    # Multi-frame Functional Groups Module PS3.3 C.7.6.16
-    dt = datetime.now()
-    ds.ContentDate = dt.strftime("%Y%m%d")
-    timeStr = dt.strftime("%H%M%S.%f")  # long format with micro seconds
-    ds.ContentTime = timeStr
-    ds.InstanceNumber = 1
-
-    per_frame = []
-    pixel_data_bytes = list()
-    # Normalize
-    frames = normalize_volume(frames)
-    # Convert to a 3d volume
-    pixel_data = np.array(frames).astype(np.uint16)
-    ds.Rows = pixel_data.shape[1]
-    ds.Columns = pixel_data.shape[2]
-    for i in range(pixel_data.shape[0]):
-        # Per Frame Functional Groups
-        frame_fgs = Dataset()
-        frame_fgs.PlanePositionSequence = [Dataset()]
-        ipp = [0, 0, DSfloat(i * meta.image_geometry.slice_thickness, auto_format=True)]
-        frame_fgs.PlanePositionSequence[0].ImagePositionPatient = ipp
-        frame_fgs.FrameContentSequence = [Dataset()]
-        frame_fgs.FrameContentSequence[0].InStackPositionNumber = i + 1
-        frame_fgs.FrameContentSequence[0].StackID = "1"
-
-        # Pixel data
-        frame_dat = pixel_data[i, :, :]
-        pixel_data_bytes.append(frame_dat.tobytes())
-        per_frame.append(frame_fgs)
-    ds.PerFrameFunctionalGroupsSequence = per_frame
-    ds.PixelData = pixel_data.tobytes()
-    ds.save_as(
-        filepath, implicit_vr=False, little_endian=True, enforce_file_format=True
+    from oct_converter.image_types import OCTVolumeWithMetaData
+    patient_dob = meta.patient_info.patient_dob.strftime("%Y-%m-%d") if meta.patient_info.patient_dob else None
+    oct_vol = OCTVolumeWithMetaData(
+        volume=frames,
+        patient_id=meta.patient_info.patient_id,
+        first_name=meta.patient_info.first_name,
+        surname=meta.patient_info.last_name,
+        sex=meta.patient_info.patient_sex,
+        patient_dob=patient_dob,
+        acquisition_date=meta.series_info.acquisition_date,
+        laterality=meta.series_info.laterality,
+        pixel_spacing=meta.image_geometry.pixel_spacing,
     )
-    return filepath
+    vendor_dev = VendorDevice(
+        manufacturer=meta.manufacturer_info.manufacturer,
+        model=meta.manufacturer_info.manufacturer_model,
+        software_version=meta.manufacturer_info.software_version,
+    )
+    study = OCTStudy(
+        source_path=Path(filepath),
+        source_format="oct",
+        oct_volume=oct_vol,
+        vendor_device=vendor_dev,
+    )
+    return write_ophthalmic_tomography_dicom_from_study(study, filepath)
 
 
 def write_fundus_dicom(
